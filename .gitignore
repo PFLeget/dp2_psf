@@ -1,0 +1,11 @@
+plots/
+data/u/
+data/g/
+data/r/
+data/i/
+data/z/
+data/y/
+data/*.pkl
+*.png
+*.py~
+.ipynb_checkpoints/
