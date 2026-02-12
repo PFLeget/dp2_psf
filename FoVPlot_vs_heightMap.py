@@ -79,6 +79,7 @@ def make_metrology_table(file="LSST_FP_cold_b_measurement_4col_bysurface.fits", 
     return bigtable
 
 def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
+                        secondMomentKey = 'dT',
                         pathPSFFile="data/g/",
                         dicZernike="visit_to_band_map.pkl",
                         fitHeightMap="data/LSST_FP_cold_b_measurement_4col_bysurface.fits",
@@ -86,6 +87,9 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                         repOutPlot='plots/',
                         repOutFile='data/',
                         ):
+
+        if secondMomentKey not in ['T', 'e1', 'e2', 'dT', 'de1', 'de2']:
+            raise ValueError('Not a valid key')
 
         print('read butler')
  
@@ -121,6 +125,10 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
             z_i_central = np.linspace(-0.25,0.25,41)
             #z_i_central = z_i_central[5:36]
             half_bin_zise = 0.03
+        if zernikeKey == 'z7':
+            z_i_central = np.linspace(-0.25,0.5,41)
+            #z_i_central = z_i_central[5:36]
+            half_bin_zise = 0.03 * 3
 
         SLOPES = []
         HEIGHTMIN = []
@@ -163,7 +171,20 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                             filtreDetector = dic[visit]['detector'] == ccd
                             coord = np.array([dic[visit]['xCCD'][filtreDetector], dic[visit]['yCCD'][filtreDetector]]).T
                             T = dic[visit]['ixx_src'][filtreDetector] + dic[visit]['iyy_src'][filtreDetector]
-                            field = T - np.mean(T)
+                            if secondMomentKey in ['T', 'dT']:
+                                field = T
+                            if secondMomentKey in ['e1', 'de1']:
+                                field = (dic[visit]['ixx_src'][filtreDetector] - dic[visit]['iyy_src'][filtreDetector]) / T
+                            if secondMomentKey in ['e2', 'de2']:
+                                field = 2 * dic[visit]['ixy_src'][filtreDetector] / T
+                            if secondMomentKey in ['dT', 'de1', 'de2']:
+                                field -= np.mean(field)
+                            #table['e1_psf'] = (table['slot_PsfShape_xx'] - table['slot_PsfShape_yy']) / table['T_psf']
+                            #table['e2_psf'] = 2*table['slot_PsfShape_xy'] / table['T_psf']
+                            if secondMomentKey in ['e1', 'de1']:
+                                T = dic[visit]['ixx_src'][filtreDetector] + dic[visit]['iyy_src'][filtreDetector]
+                                if secondMomentKey == 'dT':
+                                    field = T - np.mean(T)
                             meanify[ccd].add_field(coord, field)
                         z_i_list.append(np.nanmedian(zernikeDic[visit]))
                         N_visit += 1 
@@ -288,7 +309,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                 DTSWEEP.append(PsfSubmit)
                 HEIGHTSWEEP.append(predict)
 
-                plt.savefig(os.path.join(repOutPlot, f'{zernikeKey}_FoV_{i}_{band}.png'))
+                plt.savefig(os.path.join(repOutPlot, f'{zernikeKey}_FoV_{i}_{band}_{secondMomentKey}.png'))
                 plt.close()
 
         dicSweep = {'Z_i_SWEEP': Z_i_SWEEP,
@@ -298,7 +319,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                     'band': band,
                     'zernike': zernikeKey}
 
-        FPKL = open(os.path.join(repOutFile, f'rho_sweep_{band}_{zernikeKey}.pkl'), 'wb')
+        FPKL = open(os.path.join(repOutFile, f'rho_sweep_{band}_{zernikeKey}_{secondMomentKey}.pkl'), 'wb')
         pickle.dump(dicSweep, FPKL)
         FPKL.close()
 
@@ -316,6 +337,7 @@ def main():
     parser.add_argument('--band', type=str, required=True, help="The band to process (e.g., y, g, r, i, z, u)")
     parser.add_argument('--pathPSFFile', type=str, required=True, help="Path to PSF File")
 
+    parser.add_argument('--secondMomentKey', type=str, default='dT', help='key second moment')
     parser.add_argument('--zernikeKey', type=str, default='z4', help='Zernike coeff where the sweep is done')
     parser.add_argument('--repoButler', type=str, default='dp2_prep', help='Rep Butler')
     parser.add_argument('--repoCollectionButler', type=str, default=defaultCollectionButler, help='Collection DP2')
@@ -327,6 +349,7 @@ def main():
     args = parser.parse_args()
 
     getHeightMap_vs_FoV(band=args.band, zernikeKey=args.zernikeKey,
+                        secondMomentKey = args.secondMomentKey,
                         pathPSFFile=args.pathPSFFile,
                         repoButler=args.repoButler,    
                         collectionButler=args.repoCollectionButler,
