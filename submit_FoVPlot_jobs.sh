@@ -47,8 +47,8 @@ for band in "${FILTERS[@]}"; do
 #SBATCH --error=${LOG_DIR}/${JOB_NAME}_%j.err
 
 # Load LSST environment
-source /sdf/group/rubin/sw/tag/w_2024_49/loadLSST.bash
-setup lsst_distrib
+source /sdf/group/rubin/sw/d_latest/loadLSST.bash
+setup lsst_distrib -t d_latest
 
 # Change to script directory
 cd ${SCRIPT_DIR}

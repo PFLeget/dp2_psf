@@ -121,23 +121,23 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
         half_bin_zise = 0.15
         if zernikeKey == 'z4':
             z_i_central = z_i_central[5:36]
-        if zernikeKey == 'z11':
-            z_i_central = np.linspace(-0.25,0.25,41)
-            #z_i_central = z_i_central[5:36]
-            half_bin_zise = 0.03
+        if zernikeKey in ['z5', 'z6']:
+            z_i_central = np.linspace(-0.5,0.5, 41)
+            half_bin_zise = 0.1
         if zernikeKey == 'z7':
             z_i_central = np.linspace(-0.25,0.5,41)
-            #z_i_central = z_i_central[5:36]
             half_bin_zise = 0.03 * 3
+        if zernikeKey in ['z8', 'z9', 'z10']:
+            z_i_central = np.linspace(-0.25,0.25,41)
+            half_bin_zise = 0.03 * 3
+        if zernikeKey == 'z11':
+            z_i_central = np.linspace(-0.25,0.25,41)
+            half_bin_zise = 0.03
 
         SLOPES = []
         HEIGHTMIN = []
         z_i_min = z_i_central - half_bin_zise
         z_i_max = z_i_central + half_bin_zise
-
-        # 14
-        # z_i_min = [z_i_min[14]]
-        # z_i_max = [z_i_max[14]]
 
         MAX = 0.5
         MIN = -MAX
@@ -179,8 +179,6 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                                 field = 2 * dic[visit]['ixy_src'][filtreDetector] / T
                             if secondMomentKey in ['dT', 'de1', 'de2']:
                                 field -= np.mean(field)
-                            #table['e1_psf'] = (table['slot_PsfShape_xx'] - table['slot_PsfShape_yy']) / table['T_psf']
-                            #table['e2_psf'] = 2*table['slot_PsfShape_xy'] / table['T_psf']
                             if secondMomentKey in ['e1', 'de1']:
                                 T = dic[visit]['ixx_src'][filtreDetector] + dic[visit]['iyy_src'][filtreDetector]
                                 if secondMomentKey == 'dT':
@@ -224,7 +222,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
 
                     plt.subplot(2,2,4)
                     try:
-                        knn = KNeighborsRegressor(n_neighbors=20)#, weights='distance')
+                        knn = KNeighborsRegressor(n_neighbors=20)
                         knn.fit(coordSLAC, heightSLAC)
                         predict = knn.predict(CoordSubmit)
             
@@ -280,10 +278,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
 
                 plt.subplot(2,2,2)
 
-                binning = np.linspace(-2.5, 2.5, 100)
-
-                if zernikeKey == 'z11':
-                    binning = np.linspace(-0.5, 0.5, 50)
+                binning = np.linspace(-1, 1, 100)
 
                 _ = plt.hist(z_i, color='b', bins=binning)
                 ylim = plt.ylim()
@@ -327,10 +322,10 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
 def main():
 
     defaultCollectionButler = "LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2"
-    defaultFitHeightMap = "data/LSST_FP_cold_b_measurement_4col_bysurface.fits"
-    defaultDicZernike = "data/visit_to_band_mapv2.pkl"
-    defaultRepOutPlot = "plots/"
-    defaultRepOutFile = "data/"
+    defaultFitHeightMap = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/LSST_FP_cold_b_measurement_4col_bysurface.fits"
+    defaultDicZernike = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_to_band_mapv2.pkl"
+    defaultRepOutPlot = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/plots/"
+    defaultRepOutFile = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/"
 
 
     parser = argparse.ArgumentParser(description="Height map vs second moment analysis")
