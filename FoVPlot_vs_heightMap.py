@@ -2,6 +2,8 @@ import numpy as np
 import re
 from sklearn.neighbors import KNeighborsRegressor
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pickle
 import treegp
