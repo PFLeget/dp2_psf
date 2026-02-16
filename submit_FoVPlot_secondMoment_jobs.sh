@@ -30,6 +30,13 @@ for band in "${FILTERS[@]}"; do
 
         JOB_NAME="fov_sm_${band}_${moment}"
 
+        # Set bin_spacing based on filter
+        if [ "$band" == "ugrizy" ]; then
+            BIN_SPACING=20
+        else
+            BIN_SPACING=80
+        fi
+
         # Submit the job
         sbatch <<EOF
 #!/bin/bash
@@ -52,7 +59,7 @@ setup lsst_distrib -t d_latest
 cd ${SCRIPT_DIR}
 
 echo "Starting job: ${JOB_NAME}"
-echo "Band: ${band}, Second Moment: ${moment}"
+echo "Band: ${band}, Second Moment: ${moment}, Bin Spacing: ${BIN_SPACING}"
 echo "Time: \$(date)"
 echo "Node: \$(hostname)"
 echo "=================================================="
@@ -61,6 +68,7 @@ python ${SCRIPT_NAME} \\
     --bands ${band} \\
     --pathPSFRep "${PSF_BASE_PATH}" \\
     --key_second_moment ${moment} \\
+    --bin_spacing ${BIN_SPACING} \\
     --repOutPlot "${REP_OUT_PLOT}"
 
 echo "=================================================="
