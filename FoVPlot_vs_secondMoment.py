@@ -6,6 +6,8 @@ import treegp
 print(treegp.__version__)
 from tqdm import tqdm
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from lsst.utils.plotting import publication_plots
 publication_plots.set_rubin_plotstyle()
