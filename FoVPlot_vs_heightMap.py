@@ -136,6 +136,8 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
             z_i_central = np.linspace(-0.25,0.25,41)
             half_bin_zise = 0.03
 
+        # z_i_central = np.array([z_i_central[0]])
+
         SLOPES = []
         HEIGHTMIN = []
         z_i_min = z_i_central - half_bin_zise
@@ -146,6 +148,20 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
         MAX = MAX
         CMAP = plt.cm.seismic
         colorlabel = "T - <T> (pixel$^2$)"
+        if secondMomentKey == 'de1':
+            MAX = 0.05
+            MIN = -MAX
+            MAX = MAX
+            CMAP = plt.cm.seismic
+            colorlabel = "de1 - <de1> (pixel$^2$)"
+
+        if secondMomentKey == 'de2':
+            MAX = 0.05
+            MIN = -MAX
+            MAX = MAX
+            CMAP = plt.cm.seismic
+            colorlabel = "de1 - <de1> (pixel$^2$)"
+
 
         for i in range(len(z_i_min)):
 
@@ -306,7 +322,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                 DTSWEEP.append(PsfSubmit)
                 HEIGHTSWEEP.append(predict)
 
-                plt.savefig(os.path.join(repOutPlot, f'{zernikeKey}_FoV_{i}_{band}_{secondMomentKey}.png'))
+                plt.savefig(os.path.join(repOutPlot, f'{band}/{zernikeKey}_FoV_{i}_{band}_{secondMomentKey}.png'))
                 plt.close()
 
         dicSweep = {'Z_i_SWEEP': Z_i_SWEEP,
