@@ -17,6 +17,128 @@ import glob
 import os
 
 
+def galactic_to_equatorial(l_deg, b_deg):
+    """
+    Convert galactic coordinates to equatorial (RA, Dec).
+
+    Parameters
+    ----------
+    l_deg : array
+        Galactic longitude in degrees
+    b_deg : array
+        Galactic latitude in degrees
+
+    Returns
+    -------
+    ra_deg, dec_deg : arrays
+        Equatorial coordinates in degrees
+    """
+    # Galactic pole in equatorial coordinates
+    ra_gp = np.radians(192.85948)  # RA of galactic north pole
+    dec_gp = np.radians(27.12825)  # Dec of galactic north pole
+    l_ncp = np.radians(122.93192)  # Galactic longitude of north celestial pole
+
+    l_rad = np.radians(l_deg)
+    b_rad = np.radians(b_deg)
+
+    dec_eq = np.arcsin(np.sin(dec_gp) * np.sin(b_rad) +
+                       np.cos(dec_gp) * np.cos(b_rad) * np.cos(l_rad - l_ncp))
+    ra_eq = ra_gp + np.arctan2(
+        np.cos(b_rad) * np.sin(l_rad - l_ncp),
+        np.cos(dec_gp) * np.sin(b_rad) - np.sin(dec_gp) * np.cos(b_rad) * np.cos(l_rad - l_ncp)
+    )
+
+    return np.degrees(ra_eq) % 360, np.degrees(dec_eq)
+
+
+def plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, label='Milky Way'):
+    """
+    Plot the Milky Way plane (galactic equator) on a Mollweide projection.
+
+    Parameters
+    ----------
+    ax : matplotlib axis
+        Mollweide projection axis
+    """
+    # Galactic equator: b = 0
+    gal_lon = np.linspace(0, 360, 361)
+    gal_lat = np.zeros_like(gal_lon)
+
+    ra_eq, dec_eq = galactic_to_equatorial(gal_lon, gal_lat)
+
+    # Convert to Mollweide coordinates
+    ra_rad = np.radians(ra_eq)
+    ra_rad[ra_rad > np.pi] -= 2 * np.pi
+    dec_rad = np.radians(dec_eq)
+
+    # Sort by RA for continuous line
+    order = np.argsort(ra_rad)
+    ra_sorted = ra_rad[order]
+    dec_sorted = dec_rad[order]
+
+    # Split at discontinuities to avoid lines across the plot
+    diff = np.abs(np.diff(ra_sorted))
+    breaks = np.where(diff > np.pi)[0]
+    segments = np.split(np.arange(len(ra_sorted)), breaks + 1)
+
+    for i, seg in enumerate(segments):
+        if len(seg) > 1:
+            ax.plot(ra_sorted[seg], dec_sorted[seg], color=color, linestyle=linestyle,
+                    linewidth=linewidth, alpha=alpha, label=label if i == 0 else '')
+
+
+def plot_des_footprint(ax, color='cyan', linestyle='-', linewidth=2, alpha=0.8, label='DES'):
+    """
+    Plot the approximate DES footprint on a Mollweide projection.
+
+    The DES footprint covers ~5000 sq deg in the southern sky.
+    This is an approximate boundary.
+
+    Parameters
+    ----------
+    ax : matplotlib axis
+        Mollweide projection axis
+    """
+    # DES approximate footprint boundaries (simplified polygon)
+    # Main survey region in the southern sky
+    # DES covers roughly:
+    # - RA: 0-90 deg and 300-360 deg (with gap)
+    # - Dec: -65 to -40 deg (main), some regions up to +5 deg
+
+    # Define DES boundary as segments
+    des_boundaries = [
+        # Eastern region (RA ~ 0-90)
+        {'ra': np.concatenate([np.linspace(0, 90, 50), np.linspace(90, 0, 50)]),
+         'dec': np.concatenate([np.full(50, -65), np.full(50, -40)])},
+        # Western region (RA ~ 300-360)
+        {'ra': np.concatenate([np.linspace(300, 360, 30), np.linspace(360, 300, 30)]),
+         'dec': np.concatenate([np.full(30, -65), np.full(30, -40)])},
+    ]
+
+    # Simpler approach: draw the approximate bounding box
+    # DES wide survey approximate corners
+    des_ra = [0, 90, 90, 60, 60, 0, 0, -60, -60, 0]
+    des_dec = [-65, -65, -40, -40, 5, 5, -40, -40, -65, -65]
+
+    # Convert negative RA to positive
+    des_ra = np.array(des_ra) % 360
+    des_dec = np.array(des_dec)
+
+    # Convert to Mollweide coordinates
+    ra_rad = np.radians(des_ra)
+    ra_rad[ra_rad > np.pi] -= 2 * np.pi
+    dec_rad = np.radians(des_dec)
+
+    # Split into segments to handle wrap-around
+    # Plot each continuous segment
+    for i in range(len(ra_rad) - 1):
+        ra_diff = np.abs(ra_rad[i+1] - ra_rad[i])
+        if ra_diff < np.pi:  # Only plot if not wrapping around
+            ax.plot([ra_rad[i], ra_rad[i+1]], [dec_rad[i], dec_rad[i+1]],
+                    color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha,
+                    label=label if i == 0 else '')
+
+
 def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
                            key_second_moment='dT_T', bin_spacing=120, colorScale=0.005,
                            autoColorScale=False, autoColorScaleCst=2.,
@@ -132,6 +254,15 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         title = f"DP2 {key_second_moment} | bands: ({bands}) | nside={nside} (~{pixel_size_arcsec:.0f} arcsec)"
     ax.set_title(title, size=16)
     ax.grid(True, alpha=0.3)
+
+    # Add Milky Way plane
+    plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, label='Milky Way')
+
+    # Add DES footprint
+    plot_des_footprint(ax, color='cyan', linestyle='-', linewidth=2, alpha=0.8, label='DES')
+
+    # Add legend
+    ax.legend(loc='lower right', fontsize=10)
 
     # Add axis labels
     ax.set_xlabel('RA', size=14)
