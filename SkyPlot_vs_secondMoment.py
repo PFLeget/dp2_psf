@@ -153,11 +153,11 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     # Draw DES footprint
     sp.draw_des(edgecolor='cyan', lw=2, label='DES')
 
-    # Add colorbar
-    sp.draw_colorbar(label=colorlabel, fontsize=14)
+    # Add colorbar (pad moves it to the right)
+    sp.draw_colorbar(label=colorlabel, fontsize=14, pad=0.02)
 
-    # Set title
-    sp.ax.set_title(title, fontsize=16)
+    # Set title (y parameter moves it higher)
+    sp.ax.set_title(title, fontsize=16, y=1.05)
 
     # Add legend
     sp.ax.legend(loc='lower right', fontsize=10)
