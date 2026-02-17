@@ -80,7 +80,8 @@ def plot_FoV_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
                 coord = np.array([dic[visit]['xCCD'], dic[visit]['yCCD']]).T
                 if ccd not in meanifyStream:
                     if not statisticsMedian:
-                        meanifyStream.update({ccd: treegp.MeanifyStream(bin_spacing=bin_spacing, bounds=(0, 4100, 0, 4100))})
+                        # New API: meanify with bounds enables streaming mode for statistics="mean"
+                        meanifyStream.update({ccd: treegp.meanify(bin_spacing=bin_spacing, statistics="mean", bounds=(0, 4100, 0, 4100))})
                     else:
                         meanifyStream.update({ccd: treegp.meanify(bin_spacing=bin_spacing, statistics='median')})
                 meanifyStream[ccd].add_field(coord[filtering], dic[visit][key_second_moment][filtering])

@@ -72,8 +72,8 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
             if psf_max_value > 0:
                 filtering &= (dic[visit]["psf_max_value"] > psf_max_value)
 
-            # Sky coordinates (RA, Dec in degrees)
-            coord = np.array([dic[visit]['ra'], dic[visit]['dec']]).T
+            # Sky coordinates (RA, Dec) - convert from radians to degrees
+            coord = np.array([np.degrees(dic[visit]['ra']), np.degrees(dic[visit]['dec'])]).T
 
             meanifyHealpix.add_field(coord[filtering], dic[visit][key_second_moment][filtering])
 
