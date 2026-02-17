@@ -128,12 +128,17 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         pixels = hpg.angle_to_pixel(nside, coords0[:, 0], coords0[:, 1], nest=True, degrees=True)
         healpix_map[pixels] = params0
 
+    if key_second_moment == 'dT_T':
+        ksm = '$\\delta T / T$'
+    else:
+        ksm = key_second_moment
+
     # Set colorbar label
     if colorlabel is None:
-        colorlabel = key_second_moment
+        colorlabel = ksm
 
     if title is None:
-        title = f"DP2 {key_second_moment} | bands: ({bands}) | nside={nside} (~{pixel_size_arcsec:.0f} arcsec)"
+        title = f"DP2 {ksm} | bands: ({bands})"
 
     # Create figure and skyproj projection
     fig = plt.figure(figsize=(16, 10))
@@ -148,10 +153,11 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     )
 
     # Draw Milky Way plane
-    sp.draw_milky_way(width=0, linewidth=2, color='black', linestyle='--', label='Milky Way')
+    sp.draw_milky_way(label='Milky Way')
+    #sp.draw_milky_way(width=0, linewidth=2, color='black', linestyle='--', label='Milky Way')
 
     # Draw DES footprint
-    sp.draw_des(edgecolor='cyan', lw=2, label='DES')
+    sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
 
     # Add colorbar (pad moves it to the right)
     sp.draw_colorbar(label=colorlabel, fontsize=14, pad=0.02)
@@ -161,6 +167,8 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
 
     # Add legend
     sp.ax.legend(loc='lower right', fontsize=10)
+
+    plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08) 
 
     plt.savefig(os.path.join(repOutPlot, f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}.png'), dpi=150)
     plt.close()
