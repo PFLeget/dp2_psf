@@ -9,7 +9,7 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import healpy as hp
+import hpgeom as hpg
 
 import pickle
 import pandas as pd
@@ -17,106 +17,14 @@ import argparse
 import glob
 import os
 
-
-def galactic_to_equatorial(l_deg, b_deg):
-    """
-    Convert galactic coordinates to equatorial (RA, Dec).
-
-    Parameters
-    ----------
-    l_deg : array
-        Galactic longitude in degrees
-    b_deg : array
-        Galactic latitude in degrees
-
-    Returns
-    -------
-    ra_deg, dec_deg : arrays
-        Equatorial coordinates in degrees
-    """
-    # Galactic pole in equatorial coordinates
-    ra_gp = np.radians(192.85948)  # RA of galactic north pole
-    dec_gp = np.radians(27.12825)  # Dec of galactic north pole
-    l_ncp = np.radians(122.93192)  # Galactic longitude of north celestial pole
-
-    l_rad = np.radians(l_deg)
-    b_rad = np.radians(b_deg)
-
-    dec_eq = np.arcsin(np.sin(dec_gp) * np.sin(b_rad) +
-                       np.cos(dec_gp) * np.cos(b_rad) * np.cos(l_rad - l_ncp))
-    ra_eq = ra_gp + np.arctan2(
-        np.cos(b_rad) * np.sin(l_rad - l_ncp),
-        np.cos(dec_gp) * np.sin(b_rad) - np.sin(dec_gp) * np.cos(b_rad) * np.cos(l_rad - l_ncp)
-    )
-
-    return np.degrees(ra_eq) % 360, np.degrees(dec_eq)
+# Import skyproj for sky visualization
+from skyproj import McBrydeSkyproj
+from skyproj.survey import _Survey
 
 
-def plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, label='Milky Way'):
-    """
-    Plot the Milky Way plane (galactic equator) on a healpy Mollweide projection.
-
-    Parameters
-    ----------
-    ax : matplotlib axis
-        Healpy Mollweide projection axis
-    """
-    # Galactic equator: b = 0
-    gal_lon = np.linspace(0, 360, 361)
-    gal_lat = np.zeros_like(gal_lon)
-
-    ra_eq, dec_eq = galactic_to_equatorial(gal_lon, gal_lat)
-
-    # Convert to theta, phi for healpy (colatitude, longitude in radians)
-    theta = np.radians(90 - dec_eq)  # colatitude
-    phi = np.radians(ra_eq)          # longitude
-
-    # Sort by phi for continuous line
-    order = np.argsort(phi)
-    theta_sorted = theta[order]
-    phi_sorted = phi[order]
-
-    # Split at discontinuities to avoid lines across the plot
-    diff = np.abs(np.diff(phi_sorted))
-    breaks = np.where(diff > np.pi)[0]
-    segments = np.split(np.arange(len(phi_sorted)), breaks + 1)
-
-    for i, seg in enumerate(segments):
-        if len(seg) > 1:
-            hp.projplot(theta_sorted[seg], phi_sorted[seg], color=color, linestyle=linestyle,
-                        linewidth=linewidth, alpha=alpha, label=label if i == 0 else '')
-
-
-def plot_des_footprint(ax, color='cyan', linestyle='-', linewidth=2, alpha=0.8, label='DES'):
-    """
-    Plot the approximate DES footprint on a healpy Mollweide projection.
-
-    The DES footprint covers ~5000 sq deg in the southern sky.
-    This is an approximate boundary.
-
-    Parameters
-    ----------
-    ax : matplotlib axis
-        Healpy Mollweide projection axis
-    """
-    # DES approximate footprint boundaries
-    # DES wide survey approximate corners
-    des_ra = np.array([0, 90, 90, 60, 60, 0, 0, 300, 300, 0])
-    des_dec = np.array([-65, -65, -40, -40, 5, 5, -40, -40, -65, -65])
-
-    # Convert to theta, phi for healpy (colatitude, longitude in radians)
-    theta = np.radians(90 - des_dec)  # colatitude
-    phi = np.radians(des_ra)          # longitude
-
-    # Plot each segment separately to handle wrap-around
-    first_label = True
-    for i in range(len(phi) - 1):
-        phi_diff = np.abs(phi[i+1] - phi[i])
-        if phi_diff < np.pi:  # Only plot if not wrapping around
-            hp.projplot([theta[i], theta[i+1]], [phi[i], phi[i+1]],
-                        color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha,
-                        label=label if first_label else '')
-            first_label = False
+class SurveyMcBrydeSkyproj(_Survey, McBrydeSkyproj):
+    """McBryde projection with survey footprint drawing capabilities."""
+    pass
 
 
 def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
@@ -210,14 +118,13 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         MAX = colorScale
 
     # Create full HEALPix map with UNSEEN for empty pixels
-    npix = hp.nside2npix(nside)
-    healpix_map = np.full(npix, hp.UNSEEN)
+    npix = hpg.nside_to_npixel(nside)
+    healpix_map = np.full(npix, hpg.UNSEEN)
 
     if valid_pixels is not None:
         healpix_map[valid_pixels] = params0
     else:
         # Fallback: convert RA/Dec to pixel indices
-        import hpgeom as hpg
         pixels = hpg.angle_to_pixel(nside, coords0[:, 0], coords0[:, 1], nest=True, degrees=True)
         healpix_map[pixels] = params0
 
@@ -228,23 +135,32 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     if title is None:
         title = f"DP2 {key_second_moment} | bands: ({bands}) | nside={nside} (~{pixel_size_arcsec:.0f} arcsec)"
 
-    # Use healpy mollview for proper HEALPix rendering (no gaps)
+    # Create figure and skyproj projection
     fig = plt.figure(figsize=(16, 10))
-    hp.mollview(healpix_map, nest=True, cmap=CMAP, min=MIN, max=MAX,
-                title=title, unit=colorlabel, fig=fig.number,
-                cbar=True, hold=True)
+    ax = fig.add_subplot(111)
 
-    # Get the current axes for adding overlays
-    ax = plt.gca()
+    # Use McBryde projection with survey capabilities (full sky view)
+    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
 
-    # Add Milky Way plane
-    plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, label='Milky Way')
+    # Draw the HEALPix map
+    im, lon_raster, lat_raster, values_raster = sp.draw_hpxmap(
+        healpix_map, nest=True, zoom=False, vmin=MIN, vmax=MAX, cmap=CMAP
+    )
 
-    # Add DES footprint
-    plot_des_footprint(ax, color='cyan', linestyle='-', linewidth=2, alpha=0.8, label='DES')
+    # Draw Milky Way plane
+    sp.draw_milky_way(width=0, linewidth=2, color='black', linestyle='--', label='Milky Way')
+
+    # Draw DES footprint
+    sp.draw_des(edgecolor='cyan', lw=2, label='DES')
+
+    # Add colorbar
+    sp.draw_colorbar(label=colorlabel, fontsize=14)
+
+    # Set title
+    sp.ax.set_title(title, fontsize=16)
 
     # Add legend
-    ax.legend(loc='lower right', fontsize=10)
+    sp.ax.legend(loc='lower right', fontsize=10)
 
     plt.savefig(os.path.join(repOutPlot, f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}.png'), dpi=150)
     plt.close()
