@@ -33,9 +33,9 @@ for band in "${FILTERS[@]}"; do
         # Set bin_spacing based on filter (arcsec)
         # ugrizy: finer binning (20 arcsec), individual bands: coarser (80 arcsec)
         if [ "$band" == "ugrizy" ]; then
-            BIN_SPACING=20
+            BIN_SPACING=3600
         else
-            BIN_SPACING=80
+            BIN_SPACING=3600
         fi
 
         # Submit the job
