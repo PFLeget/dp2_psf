@@ -9,6 +9,7 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import healpy as hp
 
 import pickle
 import pandas as pd
@@ -53,12 +54,12 @@ def galactic_to_equatorial(l_deg, b_deg):
 
 def plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, label='Milky Way'):
     """
-    Plot the Milky Way plane (galactic equator) on a Mollweide projection.
+    Plot the Milky Way plane (galactic equator) on a healpy Mollweide projection.
 
     Parameters
     ----------
     ax : matplotlib axis
-        Mollweide projection axis
+        Healpy Mollweide projection axis
     """
     # Galactic equator: b = 0
     gal_lon = np.linspace(0, 360, 361)
@@ -66,30 +67,29 @@ def plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, 
 
     ra_eq, dec_eq = galactic_to_equatorial(gal_lon, gal_lat)
 
-    # Convert to Mollweide coordinates
-    ra_rad = np.radians(ra_eq)
-    ra_rad[ra_rad > np.pi] -= 2 * np.pi
-    dec_rad = np.radians(dec_eq)
+    # Convert to theta, phi for healpy (colatitude, longitude in radians)
+    theta = np.radians(90 - dec_eq)  # colatitude
+    phi = np.radians(ra_eq)          # longitude
 
-    # Sort by RA for continuous line
-    order = np.argsort(ra_rad)
-    ra_sorted = ra_rad[order]
-    dec_sorted = dec_rad[order]
+    # Sort by phi for continuous line
+    order = np.argsort(phi)
+    theta_sorted = theta[order]
+    phi_sorted = phi[order]
 
     # Split at discontinuities to avoid lines across the plot
-    diff = np.abs(np.diff(ra_sorted))
+    diff = np.abs(np.diff(phi_sorted))
     breaks = np.where(diff > np.pi)[0]
-    segments = np.split(np.arange(len(ra_sorted)), breaks + 1)
+    segments = np.split(np.arange(len(phi_sorted)), breaks + 1)
 
     for i, seg in enumerate(segments):
         if len(seg) > 1:
-            ax.plot(ra_sorted[seg], dec_sorted[seg], color=color, linestyle=linestyle,
-                    linewidth=linewidth, alpha=alpha, label=label if i == 0 else '')
+            hp.projplot(theta_sorted[seg], phi_sorted[seg], color=color, linestyle=linestyle,
+                        linewidth=linewidth, alpha=alpha, label=label if i == 0 else '')
 
 
 def plot_des_footprint(ax, color='cyan', linestyle='-', linewidth=2, alpha=0.8, label='DES'):
     """
-    Plot the approximate DES footprint on a Mollweide projection.
+    Plot the approximate DES footprint on a healpy Mollweide projection.
 
     The DES footprint covers ~5000 sq deg in the southern sky.
     This is an approximate boundary.
@@ -97,46 +97,26 @@ def plot_des_footprint(ax, color='cyan', linestyle='-', linewidth=2, alpha=0.8, 
     Parameters
     ----------
     ax : matplotlib axis
-        Mollweide projection axis
+        Healpy Mollweide projection axis
     """
-    # DES approximate footprint boundaries (simplified polygon)
-    # Main survey region in the southern sky
-    # DES covers roughly:
-    # - RA: 0-90 deg and 300-360 deg (with gap)
-    # - Dec: -65 to -40 deg (main), some regions up to +5 deg
-
-    # Define DES boundary as segments
-    des_boundaries = [
-        # Eastern region (RA ~ 0-90)
-        {'ra': np.concatenate([np.linspace(0, 90, 50), np.linspace(90, 0, 50)]),
-         'dec': np.concatenate([np.full(50, -65), np.full(50, -40)])},
-        # Western region (RA ~ 300-360)
-        {'ra': np.concatenate([np.linspace(300, 360, 30), np.linspace(360, 300, 30)]),
-         'dec': np.concatenate([np.full(30, -65), np.full(30, -40)])},
-    ]
-
-    # Simpler approach: draw the approximate bounding box
+    # DES approximate footprint boundaries
     # DES wide survey approximate corners
-    des_ra = [0, 90, 90, 60, 60, 0, 0, -60, -60, 0]
-    des_dec = [-65, -65, -40, -40, 5, 5, -40, -40, -65, -65]
+    des_ra = np.array([0, 90, 90, 60, 60, 0, 0, 300, 300, 0])
+    des_dec = np.array([-65, -65, -40, -40, 5, 5, -40, -40, -65, -65])
 
-    # Convert negative RA to positive
-    des_ra = np.array(des_ra) % 360
-    des_dec = np.array(des_dec)
+    # Convert to theta, phi for healpy (colatitude, longitude in radians)
+    theta = np.radians(90 - des_dec)  # colatitude
+    phi = np.radians(des_ra)          # longitude
 
-    # Convert to Mollweide coordinates
-    ra_rad = np.radians(des_ra)
-    ra_rad[ra_rad > np.pi] -= 2 * np.pi
-    dec_rad = np.radians(des_dec)
-
-    # Split into segments to handle wrap-around
-    # Plot each continuous segment
-    for i in range(len(ra_rad) - 1):
-        ra_diff = np.abs(ra_rad[i+1] - ra_rad[i])
-        if ra_diff < np.pi:  # Only plot if not wrapping around
-            ax.plot([ra_rad[i], ra_rad[i+1]], [dec_rad[i], dec_rad[i+1]],
-                    color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha,
-                    label=label if i == 0 else '')
+    # Plot each segment separately to handle wrap-around
+    first_label = True
+    for i in range(len(phi) - 1):
+        phi_diff = np.abs(phi[i+1] - phi[i])
+        if phi_diff < np.pi:  # Only plot if not wrapping around
+            hp.projplot([theta[i], theta[i+1]], [phi[i], phi[i+1]],
+                        color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha,
+                        label=label if first_label else '')
+            first_label = False
 
 
 def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
@@ -207,6 +187,7 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         wrms0 = meanifyHealpix.wrms0
         nside = meanifyHealpix.nside
         pixel_size_arcsec = meanifyHealpix.pixel_size_arcsec
+        valid_pixels = meanifyHealpix._valid_pixels  # HEALPix pixel indices
 
     else:
         dicInput = pd.read_pickle(pklInput)
@@ -215,6 +196,7 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         wrms0 = dicInput['wrms0']
         nside = dicInput['nside']
         pixel_size_arcsec = dicInput['pixel_size_arcsec']
+        valid_pixels = dicInput.get('valid_pixels', None)
 
     # Compute color scale
     if autoColorScale:
@@ -227,33 +209,33 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         MIN = -colorScale
         MAX = colorScale
 
-    # Create Mollweide projection plot
-    fig = plt.figure(figsize=(16, 10))
-    ax = fig.add_subplot(111, projection='mollweide')
+    # Create full HEALPix map with UNSEEN for empty pixels
+    npix = hp.nside2npix(nside)
+    healpix_map = np.full(npix, hp.UNSEEN)
 
-    # Convert RA/Dec to Mollweide projection coordinates
-    ra_plot = coords0[:, 0]
-    dec_plot = coords0[:, 1]
+    if valid_pixels is not None:
+        healpix_map[valid_pixels] = params0
+    else:
+        # Fallback: convert RA/Dec to pixel indices
+        import hpgeom as hpg
+        pixels = hpg.angle_to_pixel(nside, coords0[:, 0], coords0[:, 1], nest=True, degrees=True)
+        healpix_map[pixels] = params0
 
-    # Shift RA to [-180, 180] range and convert to radians
-    ra_rad = np.radians(ra_plot)
-    ra_rad[ra_rad > np.pi] -= 2 * np.pi
-    dec_rad = np.radians(dec_plot)
-
-    # Plot the data
-    sc = ax.scatter(ra_rad, dec_rad, c=params0, s=2, cmap=CMAP,
-                    vmin=MIN, vmax=MAX, alpha=0.8)
-
-    cb = plt.colorbar(sc, shrink=0.6, aspect=30)
+    # Set colorbar label
     if colorlabel is None:
         colorlabel = key_second_moment
-    cb.set_label(colorlabel, size=18)
-    cb.ax.tick_params(labelsize=14)
 
     if title is None:
         title = f"DP2 {key_second_moment} | bands: ({bands}) | nside={nside} (~{pixel_size_arcsec:.0f} arcsec)"
-    ax.set_title(title, size=16)
-    ax.grid(True, alpha=0.3)
+
+    # Use healpy mollview for proper HEALPix rendering (no gaps)
+    fig = plt.figure(figsize=(16, 10))
+    hp.mollview(healpix_map, nest=True, cmap=CMAP, min=MIN, max=MAX,
+                title=title, unit=colorlabel, fig=fig.number,
+                cbar=True, hold=True)
+
+    # Get the current axes for adding overlays
+    ax = plt.gca()
 
     # Add Milky Way plane
     plot_milky_way(ax, color='black', linestyle='--', linewidth=1.5, alpha=0.7, label='Milky Way')
@@ -264,11 +246,6 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     # Add legend
     ax.legend(loc='lower right', fontsize=10)
 
-    # Add axis labels
-    ax.set_xlabel('RA', size=14)
-    ax.set_ylabel('Dec', size=14)
-
-    plt.tight_layout()
     plt.savefig(os.path.join(repOutPlot, f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}.png'), dpi=150)
     plt.close()
 
@@ -280,6 +257,7 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
             'wrms0': wrms0,
             'nside': nside,
             'pixel_size_arcsec': pixel_size_arcsec,
+            'valid_pixels': valid_pixels,
             'bands': bands,
             'key_second_moment': key_second_moment,
             'bin_spacing': bin_spacing,
