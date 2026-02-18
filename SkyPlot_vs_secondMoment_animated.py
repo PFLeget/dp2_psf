@@ -6,7 +6,6 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, FFMpegWriter
 import hpgeom as hpg
 
 import os
@@ -189,15 +188,13 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
 
     print(f"Created {len(frames_data)} frames")
 
-    # Now create the animation
-    print("Creating animation...")
+    # Create temporary directory for frames
+    import tempfile
+    import subprocess
+    import shutil
 
-    # Set up the figure
-    fig = plt.figure(figsize=(16, 10))
-    ax = fig.add_subplot(111)
-
-    # Create skyproj
-    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
+    frames_dir = tempfile.mkdtemp(prefix='skyplot_frames_')
+    print(f"Saving frames to temporary directory: {frames_dir}")
 
     # Color scale
     MIN = -colorScale
@@ -208,65 +205,59 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
     else:
         ksm = key_second_moment
 
-    # Draw initial empty map
-    nside = frames_data[0]['nside']
-    npix = hpg.nside_to_npixel(nside)
-    empty_map = np.full(npix, hpg.UNSEEN)
+    # Generate each frame as a separate image
+    for frame_idx, frame in enumerate(tqdm(frames_data, desc="Generating frames")):
+        fig = plt.figure(figsize=(16, 10))
+        ax = fig.add_subplot(111)
 
-    im, lon_raster, lat_raster, values_raster = sp.draw_hpxmap(
-        empty_map, nest=True, zoom=False, vmin=MIN, vmax=MAX, cmap=CMAP
-    )
+        sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
 
-    # Draw overlays (these stay constant)
-    sp.draw_milky_way(label='Milky Way')
-    sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
-    sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
-    sp.ax.legend(loc='lower right', fontsize=10)
-
-    # Title will be updated
-    title = sp.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: 0", fontsize=16, y=1.05)
-
-    plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08)
-
-    def update(frame_idx):
-        """Update function for animation."""
-        frame = frames_data[frame_idx]
-
-        # Clear and redraw the map
-        # We need to update the pcolormesh data
-        # Unfortunately skyproj doesn't easily support updating, so we redraw
-        ax.clear()
-
-        # Recreate skyproj for this frame
-        sp_frame = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
-
-        im, _, _, _ = sp_frame.draw_hpxmap(
+        im, _, _, _ = sp.draw_hpxmap(
             frame['healpix_map'], nest=True, zoom=False, vmin=MIN, vmax=MAX, cmap=CMAP
         )
 
-        sp_frame.draw_milky_way(label='Milky Way')
-        sp_frame.draw_des(edgecolor='blue', lw=2, label='DES footprint')
-        sp_frame.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
-        sp_frame.ax.legend(loc='lower right', fontsize=10)
-        sp_frame.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: {frame['n_visits']}",
-                              fontsize=16, y=1.05)
+        sp.draw_milky_way(label='Milky Way')
+        sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
+        sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
+        sp.ax.legend(loc='lower right', fontsize=10)
+        sp.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: {frame['n_visits']}",
+                        fontsize=16, y=1.05)
 
-        return []
+        plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08)
 
-    # Create animation
-    anim = FuncAnimation(fig, update, frames=len(frames_data),
-                         interval=1000//fps, blit=False)
+        # Save frame
+        frame_file = os.path.join(frames_dir, f'frame_{frame_idx:05d}.png')
+        plt.savefig(frame_file, dpi=100)
+        plt.close(fig)
 
-    # Save as mp4
+    # Combine frames into video using ffmpeg
     output_file = os.path.join(repOutPlot,
                                f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}_animated.mp4')
 
-    print(f"Saving animation to {output_file}...")
-    writer = FFMpegWriter(fps=fps, metadata=dict(artist='LSST/Rubin'), bitrate=1800)
-    anim.save(output_file, writer=writer)
+    print(f"Combining frames into video: {output_file}")
+
+    ffmpeg_cmd = [
+        'ffmpeg', '-y',  # overwrite output
+        '-framerate', str(fps),
+        '-i', os.path.join(frames_dir, 'frame_%05d.png'),
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-crf', '23',  # quality (lower = better, 18-28 is reasonable)
+        output_file
+    ]
+
+    try:
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        print(f"Video saved to {output_file}")
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg error: {e.stderr.decode()}")
+        raise
+    finally:
+        # Clean up temporary frames
+        shutil.rmtree(frames_dir)
+        print("Cleaned up temporary frames")
 
     print("Done!")
-    plt.close()
 
 
 def main():
