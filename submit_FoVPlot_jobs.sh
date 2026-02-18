@@ -8,7 +8,7 @@
 # Configuration
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf"
 SCRIPT_NAME="FoVPlot_vs_heightMap.py"
-PSF_BASE_PATH="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data"
+VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
 
 # Create log directory if it doesn't exist
@@ -30,7 +30,6 @@ for band in "${FILTERS[@]}"; do
         for zernike in "${ZERNIKES[@]}"; do
 
             JOB_NAME="fov_${band}_${moment}_${zernike}"
-            PSF_PATH="${PSF_BASE_PATH}/${band}"
 
             # Submit the job
             sbatch <<EOF
@@ -61,7 +60,7 @@ echo "=================================================="
 
 python ${SCRIPT_NAME} \\
     --band ${band} \\
-    --pathPSFFile "${PSF_PATH}" \\
+    --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --secondMomentKey ${moment} \\
     --zernikeKey ${zernike}
 

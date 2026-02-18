@@ -1,7 +1,4 @@
-from lsst.daf.butler import Butler
 import numpy as np
-from astropy.table import Table
-import astropy.units as units
 import treegp
 print(treegp.__version__)
 from tqdm import tqdm
@@ -12,23 +9,81 @@ import matplotlib.pyplot as plt
 from lsst.utils.plotting import publication_plots
 publication_plots.set_rubin_plotstyle()
 
+import os
+os.environ["POLARS_MAX_THREADS"] = "1"
+import polars
+
 import pickle
 import lsst.afw.cameraGeom as cameraGeom
 from lsst.obs.lsst import LsstCam
-from lsst.geom import SpherePoint, degrees, Point2D
-import pandas as pd
 import argparse
-
-# I guess this cmap or the other can in general
-# give better idea of physical variation on the
-# focal plane from past experience.
-# CMAP = plt.cm.inferno
-
-import glob
-import os
 
 
 camera = LsstCam.getCamera()
+
+
+# Columns to read from parquet files
+PARQUET_COLUMNS = [
+    'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
+    'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
+    'coord_ra', 'coord_dec', 'slot_Centroid_x', 'slot_Centroid_y',
+    'detector', 'psf_max_value', 'calib_psf_reserved',
+]
+
+
+def load_visit_data(parquet_path):
+    """
+    Load visit data from parquet file and compute derived columns.
+
+    Parameters
+    ----------
+    parquet_path : str
+        Path to the parquet file
+
+    Returns
+    -------
+    dict
+        Dictionary with all necessary columns including derived ones
+    """
+    # Read parquet file with polars (fast!)
+    table = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
+
+    # Convert to numpy arrays
+    slot_Shape_xx = table['slot_Shape_xx'].to_numpy()
+    slot_Shape_yy = table['slot_Shape_yy'].to_numpy()
+    slot_Shape_xy = table['slot_Shape_xy'].to_numpy()
+    slot_PsfShape_xx = table['slot_PsfShape_xx'].to_numpy()
+    slot_PsfShape_yy = table['slot_PsfShape_yy'].to_numpy()
+    slot_PsfShape_xy = table['slot_PsfShape_xy'].to_numpy()
+
+    # Compute derived quantities
+    T_src = slot_Shape_xx + slot_Shape_yy
+    e1_src = (slot_Shape_xx - slot_Shape_yy) / T_src
+    e2_src = 2 * slot_Shape_xy / T_src
+
+    T_psf = slot_PsfShape_xx + slot_PsfShape_yy
+    e1_psf = (slot_PsfShape_xx - slot_PsfShape_yy) / T_psf
+    e2_psf = 2 * slot_PsfShape_xy / T_psf
+
+    return {
+        'ixx_src': slot_Shape_xx,
+        'iyy_src': slot_Shape_yy,
+        'ixy_src': slot_Shape_xy,
+        'ixx_psf': slot_PsfShape_xx,
+        'iyy_psf': slot_PsfShape_yy,
+        'ixy_psf': slot_PsfShape_xy,
+        'dT_T': (T_src - T_psf) / T_src,
+        'de1': e1_src - e1_psf,
+        'de2': e2_src - e2_psf,
+        'ra': table['coord_ra'].to_numpy(),
+        'dec': table['coord_dec'].to_numpy(),
+        'xCCD': table['slot_Centroid_x'].to_numpy(),
+        'yCCD': table['slot_Centroid_y'].to_numpy(),
+        'detector': table['detector'].to_numpy(),
+        'psf_max_value': table['psf_max_value'].to_numpy(),
+        'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
+    }
+
 
 def pixel_to_focal(x, y, det):
     """
@@ -47,54 +102,95 @@ def pixel_to_focal(x, y, det):
     """
     tx = det.getTransform(cameraGeom.PIXELS, cameraGeom.FOCAL_PLANE)
     fpx, fpy = tx.getMapping().applyForward(np.vstack((x, y)))
-    
+
     return fpx.ravel(), fpy.ravel()
 
 
-def plot_FoV_second_Moment(bands='g', rep="data/", repOutPlot='plots/', 
-                           key_second_moment='dT_T', bin_spacing = 150, colorScale = 0.005, autoColorScale=False,
-                           autoColorScaleCst=2., statisticsMedian=False,
+def plot_FoV_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
+                           repOutPlot='plots/',
+                           key_second_moment='dT_T', bin_spacing=150, colorScale=0.005,
+                           autoColorScale=False, autoColorScaleCst=2., statisticsMedian=False,
                            colorlabel=None, title=None, pklInput=None, psf_max_value=0):
+    """
+    Plot spatial variation of PSF second moments on the focal plane.
+
+    Parameters
+    ----------
+    bands : str
+        Band(s) to process (e.g., 'g', 'ugrizy')
+    visitMappingFile : str
+        Path to the visit_parquet_mapping.pkl file
+    repOutPlot : str
+        Output directory for plots
+    key_second_moment : str
+        Second moment key to plot (e.g., 'dT_T', 'de1', 'de2')
+    bin_spacing : float
+        Bin spacing in pixels
+    colorScale : float
+        Color scale range [-colorScale, +colorScale]
+    autoColorScale : bool
+        If True, compute color scale from data
+    autoColorScaleCst : float
+        Number of sigma for auto color scale
+    statisticsMedian : bool
+        If True, use median instead of mean
+    colorlabel : str
+        Label for colorbar
+    title : str
+        Plot title
+    pklInput : str
+        Path to pre-computed pickle file (to redo plot only)
+    psf_max_value : float
+        Exclude PSFs with max pixel value below this threshold
+    """
 
     CMAP = plt.cm.inferno
 
     if pklInput is None:
+        # Load the visit mapping
+        with open(visitMappingFile, 'rb') as f:
+            visit_mapping = pickle.load(f)
 
-        pkls = []
-        for b in bands:
-            pkls.append(glob.glob(os.path.join(rep, b+'/*.pkl')))
-        pkls = np.concatenate(pkls)
-        # pkls = pkls[:100]
+        # Filter visits by band(s)
+        selected_visits = []
+        for visit, info in visit_mapping.items():
+            if info['band'] in bands:
+                selected_visits.append((visit, info))
 
+        print(f"Selected {len(selected_visits)} visits for bands: {bands}")
 
         meanifyStream = {}
 
-        for pkl in tqdm(pkls, desc="loop over visits to compute spatial average:"):
-            dic = pd.read_pickle(pkl)
-            visit = list(dic.keys())[0]
-            ccdIds = set(dic[visit]["detector"])
-            
+        for visit, info in tqdm(selected_visits, desc="Loop over visits to compute spatial average:"):
+            # Load data directly from parquet
+            data = load_visit_data(info['parquet_path'])
+
+            ccdIds = set(data["detector"])
+
             for ccd in ccdIds:
-                filtering = (dic[visit]["detector"] == ccd)
-                filtering &= (dic[visit]["psf_max_value"] > psf_max_value)
-                coord = np.array([dic[visit]['xCCD'], dic[visit]['yCCD']]).T
+                filtering = (data["detector"] == ccd)
+                filtering &= (data["psf_max_value"] > psf_max_value)
+                coord = np.array([data['xCCD'], data['yCCD']]).T
                 if ccd not in meanifyStream:
                     if not statisticsMedian:
                         # New API: meanify with bounds enables streaming mode for statistics="mean"
                         meanifyStream.update({ccd: treegp.meanify(bin_spacing=bin_spacing, statistics="mean", bounds=(0, 4100, 0, 4100))})
                     else:
                         meanifyStream.update({ccd: treegp.meanify(bin_spacing=bin_spacing, statistics='median')})
-                meanifyStream[ccd].add_field(coord[filtering], dic[visit][key_second_moment][filtering])
+                meanifyStream[ccd].add_field(coord[filtering], data[key_second_moment][filtering])
 
         for ccd in meanifyStream:
             if not statisticsMedian:
                 meanifyStream[ccd].meanify()
             else:
                 meanifyStream[ccd].meanify(lu_min=0, lu_max=4100, lv_min=0, lv_max=4100)
-    else:
-        dicInput = pd.read_pickle(pklInput)
-        ccdIds = list(dicInput.keys())
 
+        ccdIds = list(meanifyStream.keys())
+
+    else:
+        with open(pklInput, 'rb') as f:
+            dicInput = pickle.load(f)
+        ccdIds = list(dicInput.keys())
 
     if autoColorScale:
         M = []
@@ -114,7 +210,7 @@ def plot_FoV_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         MAX = colorScale
 
     dicMeanifyPlot = {}
-    plt.figure(figsize=(20,12))
+    plt.figure(figsize=(20, 12))
     for i in ccdIds:
         if pklInput is None:
             x, y = np.meshgrid(meanifyStream[i]._xedge, meanifyStream[i]._yedge)
@@ -124,7 +220,7 @@ def plot_FoV_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
             x, y = pixel_to_focal(x, y, camera[i])
             x = x.reshape((nBin0, nBin1))
             y = y.reshape((nBin0, nBin1))
-            plt.pcolormesh(x, y , meanifyStream[i]._average, vmin=MIN, vmax=MAX, cmap=CMAP)
+            plt.pcolormesh(x, y, meanifyStream[i]._average, vmin=MIN, vmax=MAX, cmap=CMAP)
             dicMeanifyPlot.update({i: {
                 'x': x,
                 'y': y,
@@ -140,16 +236,15 @@ def plot_FoV_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
 
     cb.set_label(colorlabel, size=22)
     cb.ax.tick_params(labelsize=18)
-    plt.xlabel('x (mm)',size=22)
-    plt.ylabel('y (mm)',size=22)
+    plt.xlabel('x (mm)', size=22)
+    plt.ylabel('y (mm)', size=22)
     if title is None:
-        title = f"DP2 {key_second_moment} | bands: ({bands})" 
+        title = f"DP2 {key_second_moment} | bands: ({bands})"
     plt.title(title, size=18)
     plt.axis('equal')
     plt.xticks(fontsize=18)
     plt.yticks(fontsize=18)
-    #plt.gcf().patch.set_facecolor('none')
-    #plt.gca().patch.set_facecolor('none')
+
     if statisticsMedian:
         median_key = "median"
     else:
@@ -161,44 +256,33 @@ def plot_FoV_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         pickle.dump(dicMeanifyPlot, pklFile)
         pklFile.close()
 
+
 def main():
 
-    parser = argparse.ArgumentParser(description="Height map vs second moment analysis")
-    parser.add_argument('--bands', type=str, required=True, help="The band to process (e.g., y, g, r, i, z, u)")
-    parser.add_argument('--pathPSFRep', type=str, required=True, help="Path to PSF File")
+    parser = argparse.ArgumentParser(description="Focal plane map of PSF second moment residuals")
+    parser.add_argument('--bands', type=str, required=True, help="The band(s) to process (e.g., y, g, r, i, z, u, ugrizy)")
+    parser.add_argument('--visitMappingFile', type=str, required=True, help="Path to visit_parquet_mapping.pkl file")
 
     parser.add_argument('--key_second_moment', type=str, default='dT_T', help='second moment key')
-    parser.add_argument('--bin_spacing', type=float, default=150, help='bin size')
-    parser.add_argument('--psf_max_value', type=float, default=0, help='exclude all psf that has a lower value for the pixel max (e-)')
+    parser.add_argument('--bin_spacing', type=float, default=150, help='bin size in pixels')
+    parser.add_argument('--psf_max_value', type=float, default=0, help='exclude PSFs with max pixel value below this (e-)')
     parser.add_argument('--colorScale', type=float, default=0.005, help='Min/Max of color scale')
-    parser.add_argument('--autoColorScaleCst', type=float, default=2., help='')
-    parser.add_argument('--repOutPlot', type=str, default='plots/', help='Rep out plot')
-    parser.add_argument('--pklInput', type=str, default=None, help='the output give as input just to redo the plot')   
+    parser.add_argument('--autoColorScaleCst', type=float, default=2., help='Number of sigma for auto color scale')
+    parser.add_argument('--repOutPlot', type=str, default='plots/', help='Output directory for plots')
+    parser.add_argument('--pklInput', type=str, default=None, help='Pre-computed pickle to redo plot only')
 
-    parser.add_argument('--autoColorScale', action='store_true',)
-    parser.add_argument('--statisticsMedian', action='store_true',)
+    parser.add_argument('--autoColorScale', action='store_true')
+    parser.add_argument('--statisticsMedian', action='store_true')
 
     args = parser.parse_args()
 
-    plot_FoV_second_Moment(bands=args.bands, rep=args.pathPSFRep, repOutPlot=args.repOutPlot, 
-                           key_second_moment=args.key_second_moment, bin_spacing = args.bin_spacing, 
-                           colorScale = args.colorScale, autoColorScale=args.autoColorScale, 
+    plot_FoV_second_Moment(bands=args.bands, visitMappingFile=args.visitMappingFile,
+                           repOutPlot=args.repOutPlot,
+                           key_second_moment=args.key_second_moment, bin_spacing=args.bin_spacing,
+                           colorScale=args.colorScale, autoColorScale=args.autoColorScale,
                            autoColorScaleCst=args.autoColorScaleCst, statisticsMedian=args.statisticsMedian,
                            colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value)
 
 
-
 if __name__ == "__main__":
-
     main()
-
-
-    
-
-
-
-
-
-    
-
-
