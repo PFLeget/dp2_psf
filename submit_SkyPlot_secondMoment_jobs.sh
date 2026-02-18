@@ -8,7 +8,7 @@
 # Configuration
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf"
 SCRIPT_NAME="SkyPlot_vs_secondMoment.py"
-PSF_BASE_PATH="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data"
+VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT_PLOT="${SCRIPT_DIR}/plots"
 
@@ -67,7 +67,7 @@ echo "=================================================="
 
 python ${SCRIPT_NAME} \\
     --bands ${band} \\
-    --pathPSFRep "${PSF_BASE_PATH}" \\
+    --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --key_second_moment ${moment} \\
     --bin_spacing ${BIN_SPACING} \\
     --repOutPlot "${REP_OUT_PLOT}"

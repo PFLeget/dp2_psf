@@ -1,7 +1,4 @@
-from lsst.daf.butler import Butler
 import numpy as np
-from astropy.table import Table
-import astropy.units as units
 import treegp
 print(treegp.__version__)
 from tqdm import tqdm
@@ -11,11 +8,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import hpgeom as hpg
 
-import pickle
-import pandas as pd
-import argparse
-import glob
 import os
+os.environ["POLARS_MAX_THREADS"] = "1"
+import polars
+
+import pickle
+import argparse
 
 # Import skyproj for sky visualization
 from skyproj import McBrydeSkyproj
@@ -27,7 +25,71 @@ class SurveyMcBrydeSkyproj(_Survey, McBrydeSkyproj):
     pass
 
 
-def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
+# Columns to read from parquet files
+PARQUET_COLUMNS = [
+    'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
+    'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
+    'coord_ra', 'coord_dec', 'slot_Centroid_x', 'slot_Centroid_y',
+    'detector', 'psf_max_value', 'calib_psf_reserved',
+]
+
+
+def load_visit_data(parquet_path):
+    """
+    Load visit data from parquet file and compute derived columns.
+
+    Parameters
+    ----------
+    parquet_path : str
+        Path to the parquet file
+
+    Returns
+    -------
+    dict
+        Dictionary with all necessary columns including derived ones
+    """
+    # Read parquet file with polars (fast!)
+    table = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
+
+    # Convert to numpy arrays
+    slot_Shape_xx = table['slot_Shape_xx'].to_numpy()
+    slot_Shape_yy = table['slot_Shape_yy'].to_numpy()
+    slot_Shape_xy = table['slot_Shape_xy'].to_numpy()
+    slot_PsfShape_xx = table['slot_PsfShape_xx'].to_numpy()
+    slot_PsfShape_yy = table['slot_PsfShape_yy'].to_numpy()
+    slot_PsfShape_xy = table['slot_PsfShape_xy'].to_numpy()
+
+    # Compute derived quantities
+    T_src = slot_Shape_xx + slot_Shape_yy
+    e1_src = (slot_Shape_xx - slot_Shape_yy) / T_src
+    e2_src = 2 * slot_Shape_xy / T_src
+
+    T_psf = slot_PsfShape_xx + slot_PsfShape_yy
+    e1_psf = (slot_PsfShape_xx - slot_PsfShape_yy) / T_psf
+    e2_psf = 2 * slot_PsfShape_xy / T_psf
+
+    return {
+        'ixx_src': slot_Shape_xx,
+        'iyy_src': slot_Shape_yy,
+        'ixy_src': slot_Shape_xy,
+        'ixx_psf': slot_PsfShape_xx,
+        'iyy_psf': slot_PsfShape_yy,
+        'ixy_psf': slot_PsfShape_xy,
+        'dT_T': (T_src - T_psf) / T_src,
+        'de1': e1_src - e1_psf,
+        'de2': e2_src - e2_psf,
+        'ra': table['coord_ra'].to_numpy(),
+        'dec': table['coord_dec'].to_numpy(),
+        'xCCD': table['slot_Centroid_x'].to_numpy(),
+        'yCCD': table['slot_Centroid_y'].to_numpy(),
+        'detector': table['detector'].to_numpy(),
+        'psf_max_value': table['psf_max_value'].to_numpy(),
+        'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
+    }
+
+
+def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
+                           repOutPlot='plots/',
                            key_second_moment='dT_T', bin_spacing=120, colorScale=0.005,
                            autoColorScale=False, autoColorScaleCst=2.,
                            colorlabel=None, title=None, pklInput=None, psf_max_value=0):
@@ -38,8 +100,8 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     ----------
     bands : str
         Band(s) to process (e.g., 'g', 'ugrizy')
-    rep : str
-        Path to directory containing PSF pickle files
+    visitMappingFile : str
+        Path to the visit_parquet_mapping.pkl file
     repOutPlot : str
         Output directory for plots
     key_second_moment : str
@@ -65,27 +127,34 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     CMAP = plt.cm.inferno
 
     if pklInput is None:
-        pkls = []
-        for b in bands:
-            pkls.append(glob.glob(os.path.join(rep, b + '/*.pkl')))
-        pkls = np.concatenate(pkls)
+        # Load the visit mapping
+        with open(visitMappingFile, 'rb') as f:
+            visit_mapping = pickle.load(f)
+
+        # Filter visits by band(s)
+        selected_visits = []
+        for visit, info in visit_mapping.items():
+            if info['band'] in bands:
+                selected_visits.append((visit, info))
+
+        print(f"Selected {len(selected_visits)} visits for bands: {bands}")
 
         # Use meanify_healpix for sky coordinates
         meanifyHealpix = treegp.meanify_healpix(bin_spacing=bin_spacing)
 
-        for pkl in tqdm(pkls, desc="Loop over visits to compute spatial average on sky:"):
-            dic = pd.read_pickle(pkl)
-            visit = list(dic.keys())[0]
+        for visit, info in tqdm(selected_visits, desc="Loop over visits to compute spatial average on sky:"):
+            # Load data directly from parquet
+            data = load_visit_data(info['parquet_path'])
 
             # Filter by psf_max_value if specified
-            filtering = np.ones(len(dic[visit]["ra"]), dtype=bool)
+            filtering = np.ones(len(data["ra"]), dtype=bool)
             if psf_max_value > 0:
-                filtering &= (dic[visit]["psf_max_value"] > psf_max_value)
+                filtering &= (data["psf_max_value"] > psf_max_value)
 
             # Sky coordinates (RA, Dec) - convert from radians to degrees
-            coord = np.array([np.degrees(dic[visit]['ra']), np.degrees(dic[visit]['dec'])]).T
+            coord = np.array([np.degrees(data['ra']), np.degrees(data['dec'])]).T
 
-            meanifyHealpix.add_field(coord[filtering], dic[visit][key_second_moment][filtering])
+            meanifyHealpix.add_field(coord[filtering], data[key_second_moment][filtering])
 
         meanifyHealpix.meanify()
 
@@ -98,7 +167,8 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
         valid_pixels = meanifyHealpix._valid_pixels  # HEALPix pixel indices
 
     else:
-        dicInput = pd.read_pickle(pklInput)
+        with open(pklInput, 'rb') as f:
+            dicInput = pickle.load(f)
         coords0 = dicInput['coords0']
         params0 = dicInput['params0']
         wrms0 = dicInput['wrms0']
@@ -154,7 +224,6 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
 
     # Draw Milky Way plane
     sp.draw_milky_way(label='Milky Way')
-    #sp.draw_milky_way(width=0, linewidth=2, color='black', linestyle='--', label='Milky Way')
 
     # Draw DES footprint
     sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
@@ -168,7 +237,7 @@ def plot_Sky_second_Moment(bands='g', rep="data/", repOutPlot='plots/',
     # Add legend
     sp.ax.legend(loc='lower right', fontsize=10)
 
-    plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08) 
+    plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08)
 
     plt.savefig(os.path.join(repOutPlot, f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}.png'), dpi=150)
     plt.close()
@@ -195,7 +264,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Sky map of PSF second moment residuals")
     parser.add_argument('--bands', type=str, required=True, help="The band(s) to process (e.g., y, g, r, i, z, u, ugrizy)")
-    parser.add_argument('--pathPSFRep', type=str, required=True, help="Path to PSF File directory")
+    parser.add_argument('--visitMappingFile', type=str, required=True, help="Path to visit_parquet_mapping.pkl file")
 
     parser.add_argument('--key_second_moment', type=str, default='dT_T', help='second moment key')
     parser.add_argument('--bin_spacing', type=float, default=120, help='HEALPix bin size in arcsec')
@@ -209,7 +278,8 @@ def main():
 
     args = parser.parse_args()
 
-    plot_Sky_second_Moment(bands=args.bands, rep=args.pathPSFRep, repOutPlot=args.repOutPlot,
+    plot_Sky_second_Moment(bands=args.bands, visitMappingFile=args.visitMappingFile,
+                           repOutPlot=args.repOutPlot,
                            key_second_moment=args.key_second_moment, bin_spacing=args.bin_spacing,
                            colorScale=args.colorScale, autoColorScale=args.autoColorScale,
                            autoColorScaleCst=args.autoColorScaleCst,
