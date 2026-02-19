@@ -259,15 +259,15 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
     # Focal plane diameter is ~3.5 degrees, so radius is 1.75 degrees
     FOCAL_PLANE_RADIUS = 1.75
 
-    # LSST Deep Drilling Fields (RA, Dec in degrees, radius in degrees)
+    # LSST Deep Drilling Fields (RA, Dec in degrees, radius in degrees, color, linestyle)
     # Reference: https://www.lsst.org/scientists/survey-design/ddf
     DDF_FIELDS = {
-        'ELAIS-S1': (9.45, -44.0, 1.75 * 2),
-        'XMM-LSS': (35.708, -4.75, 1.75 * 2),
-        'ECDFS': (53.125, -28.1, 1.75 * 2),
-        'COSMOS': (150.12, 2.21, 1.75 * 2),
-        'EDFS_a': (58.9, -49.3, 1.75 * 2),
-        'EDFS_b': (63.3, -47.6, 1.75 * 2),
+        'ELAIS-S1': (9.45, -44.0, 1.75 * 2, 'red', '-'),
+        'XMM-LSS': (35.708, -4.75, 1.75 * 2, 'orange', '--'),
+        'ECDFS': (53.125, -28.1, 1.75 * 2, 'green', '-.'),
+        'COSMOS': (150.12, 2.21, 1.75 * 2, 'purple', ':'),
+        'EDFS_a': (58.9, -49.3, 1.75 * 2, 'magenta', '-'),
+        'EDFS_b': (63.3, -47.6, 1.75 * 2, 'brown', '--'),
     }
 
     for frame_idx, frame in enumerate(tqdm(frames_data, desc="Generating frames")):
@@ -284,9 +284,9 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
         sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
 
         # Draw Deep Drilling Fields
-        for ddf_name, (ddf_ra, ddf_dec, ddf_radius) in DDF_FIELDS.items():
+        for ddf_name, (ddf_ra, ddf_dec, ddf_radius, ddf_color, ddf_ls) in DDF_FIELDS.items():
             draw_sky_circle(sp, ddf_ra, ddf_dec, ddf_radius, npts=100,
-                            color='blue', lw=1.5, linestyle='--', label=ddf_name)
+                            color=ddf_color, lw=1.5, linestyle=ddf_ls, label=ddf_name)
 
         # Draw circle showing last visit's focal plane position
         draw_sky_circle(sp, frame['last_visit_ra'], frame['last_visit_dec'], FOCAL_PLANE_RADIUS * 1.5,
@@ -294,7 +294,7 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
                         label=f"Last visit: {frame['last_visit_date']}")
 
         sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
-        sp.ax.legend(loc='lower right', fontsize=10)
+        sp.ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.02), ncol=5, fontsize=9)
         sp.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: {frame['n_visits']} | Date: {frame['last_visit_date']}",
                         fontsize=16, y=1.05)
 
