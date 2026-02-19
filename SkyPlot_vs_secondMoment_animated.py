@@ -262,11 +262,12 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
     # LSST Deep Drilling Fields (RA, Dec in degrees, radius in degrees)
     # Reference: https://www.lsst.org/scientists/survey-design/ddf
     DDF_FIELDS = {
-        'ELAIS-S1': (9.45, -44.0, 1.75),
-        'XMM-LSS': (35.708, -4.75, 1.75),
-        'ECDFS': (53.125, -28.1, 1.75),
-        'COSMOS': (150.12, 2.21, 1.75),
-        'EDFS': (58.9, -49.3, 1.75),
+        'ELAIS-S1': (9.45, -44.0, 1.75 * 2),
+        'XMM-LSS': (35.708, -4.75, 1.75 * 2),
+        'ECDFS': (53.125, -28.1, 1.75 * 2),
+        'COSMOS': (150.12, 2.21, 1.75 * 2),
+        'EDFS_a': (58.9, -49.3, 1.75 * 2),
+        'EDFS_b': (63.3, -47.6, 1.75 * 2),
     }
 
     for frame_idx, frame in enumerate(tqdm(frames_data, desc="Generating frames")):
@@ -285,11 +286,11 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
         # Draw Deep Drilling Fields
         for ddf_name, (ddf_ra, ddf_dec, ddf_radius) in DDF_FIELDS.items():
             draw_sky_circle(sp, ddf_ra, ddf_dec, ddf_radius, npts=100,
-                            color='cyan', lw=1.5, linestyle='--', label=ddf_name)
+                            color='blue', lw=1.5, linestyle='--', label=ddf_name)
 
         # Draw circle showing last visit's focal plane position
-        draw_sky_circle(sp, frame['last_visit_ra'], frame['last_visit_dec'], FOCAL_PLANE_RADIUS,
-                        npts=100, color='lime', lw=2,
+        draw_sky_circle(sp, frame['last_visit_ra'], frame['last_visit_dec'], FOCAL_PLANE_RADIUS * 1.5,
+                        npts=100, color='cyan', lw=2,
                         label=f"Last visit: {frame['last_visit_date']}")
 
         sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
