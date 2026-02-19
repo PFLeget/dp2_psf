@@ -54,7 +54,7 @@ def draw_sky_circle(sp, ra_center, dec_center, radius, npts=100, **kwargs):
     ra = np.append(ra, ra[0])
     dec = np.append(dec, dec[0])
 
-    return sp.plot(ra, dec, **kwargs)
+    return sp.ax.plot(ra, dec, **kwargs)
 
 
 # Columns to read from parquet files
