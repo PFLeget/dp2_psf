@@ -142,6 +142,11 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
     # We'll store intermediate states for animation
     print("Loading all visits and computing intermediate averages...")
 
+    # Helper function to parse date from visit ID (first 8 digits: YYYYMMDD)
+    def get_date_from_visit(visit_id):
+        date_str = str(visit_id)[:8]
+        return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+
     # Compute nside from bin_spacing to create the healpix map structure
     # We need to process at least one visit first to get nside
     first_visit, first_info = selected_visits[0]
@@ -152,7 +157,12 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
     coord = np.array([np.degrees(data['ra']), np.degrees(data['dec'])]).T
     meanifyHealpix.add_field(coord[filtering], data[key_second_moment][filtering])
 
-    # Store frames data: list of (n_visits, healpix_map, nside)
+    # Store the center of the first visit
+    last_visit_ra = np.median(coord[filtering, 0])
+    last_visit_dec = np.median(coord[filtering, 1])
+    last_visit_id = first_visit
+
+    # Store frames data: list of (n_visits, healpix_map, nside, visit_center, visit_date)
     frames_data = []
 
     # Process visits in batches
@@ -169,6 +179,11 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
         meanifyHealpix.add_field(coord[filtering], data[key_second_moment][filtering])
         n_visits += 1
 
+        # Update last visit info
+        last_visit_ra = np.median(coord[filtering, 0])
+        last_visit_dec = np.median(coord[filtering, 1])
+        last_visit_id = visit
+
         # Save frame every visits_per_frame visits
         if n_visits % visits_per_frame == 0 or i == len(selected_visits) - 2:
             # Compute current average
@@ -184,6 +199,9 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
                 'n_visits': n_visits,
                 'healpix_map': healpix_map.copy(),
                 'nside': nside,
+                'last_visit_ra': last_visit_ra,
+                'last_visit_dec': last_visit_dec,
+                'last_visit_date': get_date_from_visit(last_visit_id),
             })
 
     print(f"Created {len(frames_data)} frames")
@@ -206,6 +224,19 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
         ksm = key_second_moment
 
     # Generate each frame as a separate image
+    # Focal plane diameter is ~3.5 degrees, so radius is 1.75 degrees
+    FOCAL_PLANE_RADIUS = 1.75
+
+    # LSST Deep Drilling Fields (RA, Dec in degrees, radius in degrees)
+    # Reference: https://www.lsst.org/scientists/survey-design/ddf
+    DDF_FIELDS = {
+        'ELAIS-S1': (9.45, -44.0, 1.75),
+        'XMM-LSS': (35.708, -4.75, 1.75),
+        'ECDFS': (53.125, -28.1, 1.75),
+        'COSMOS': (150.12, 2.21, 1.75),
+        'EDFS': (58.9, -49.3, 1.75),
+    }
+
     for frame_idx, frame in enumerate(tqdm(frames_data, desc="Generating frames")):
         fig = plt.figure(figsize=(16, 10))
         ax = fig.add_subplot(111)
@@ -218,9 +249,21 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
 
         sp.draw_milky_way(label='Milky Way')
         sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
+
+        # Draw Deep Drilling Fields
+        for ddf_name, (ddf_ra, ddf_dec, ddf_radius) in DDF_FIELDS.items():
+            sp.tissot(ddf_ra, ddf_dec, ddf_radius, npts=100,
+                      facecolor='none', edgecolor='cyan', lw=1.5, linestyle='--',
+                      label=ddf_name)
+
+        # Draw circle showing last visit's focal plane position
+        sp.tissot(frame['last_visit_ra'], frame['last_visit_dec'], FOCAL_PLANE_RADIUS,
+                  npts=100, facecolor='none', edgecolor='lime', lw=2,
+                  label=f"Last visit: {frame['last_visit_date']}")
+
         sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
         sp.ax.legend(loc='lower right', fontsize=10)
-        sp.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: {frame['n_visits']}",
+        sp.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: {frame['n_visits']} | Date: {frame['last_visit_date']}",
                         fontsize=16, y=1.05)
 
         plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08)
