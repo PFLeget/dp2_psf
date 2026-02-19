@@ -25,6 +25,38 @@ class SurveyMcBrydeSkyproj(_Survey, McBrydeSkyproj):
     pass
 
 
+def draw_sky_circle(sp, ra_center, dec_center, radius, npts=100, **kwargs):
+    """
+    Draw a circle on the sky projection.
+
+    Parameters
+    ----------
+    sp : Skyproj
+        The skyproj object
+    ra_center, dec_center : float
+        Center coordinates in degrees
+    radius : float
+        Radius in degrees
+    npts : int
+        Number of points to use for the circle
+    **kwargs : dict
+        Additional arguments passed to sp.plot()
+    """
+    # Generate circle points
+    theta = np.linspace(0, 2 * np.pi, npts)
+
+    # Compute circle points on the sky (small circle approximation)
+    dec = dec_center + radius * np.cos(theta)
+    # Account for cos(dec) factor for RA
+    ra = ra_center + radius * np.sin(theta) / np.cos(np.radians(dec_center))
+
+    # Close the circle
+    ra = np.append(ra, ra[0])
+    dec = np.append(dec, dec[0])
+
+    return sp.plot(ra, dec, **kwargs)
+
+
 # Columns to read from parquet files
 PARQUET_COLUMNS = [
     'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
@@ -252,14 +284,13 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
 
         # Draw Deep Drilling Fields
         for ddf_name, (ddf_ra, ddf_dec, ddf_radius) in DDF_FIELDS.items():
-            sp.tissot(ddf_ra, ddf_dec, ddf_radius, npts=100,
-                      facecolor='none', edgecolor='cyan', lw=1.5, linestyle='--',
-                      label=ddf_name)
+            draw_sky_circle(sp, ddf_ra, ddf_dec, ddf_radius, npts=100,
+                            color='cyan', lw=1.5, linestyle='--', label=ddf_name)
 
         # Draw circle showing last visit's focal plane position
-        sp.tissot(frame['last_visit_ra'], frame['last_visit_dec'], FOCAL_PLANE_RADIUS,
-                  npts=100, facecolor='none', edgecolor='lime', lw=2,
-                  label=f"Last visit: {frame['last_visit_date']}")
+        draw_sky_circle(sp, frame['last_visit_ra'], frame['last_visit_dec'], FOCAL_PLANE_RADIUS,
+                        npts=100, color='lime', lw=2,
+                        label=f"Last visit: {frame['last_visit_date']}")
 
         sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
         sp.ax.legend(loc='lower right', fontsize=10)
