@@ -16,7 +16,7 @@ REP_OUT_PLOT="${SCRIPT_DIR}/plots"
 mkdir -p "${LOG_DIR}"
 
 # Define parameter arrays
-FILTERS=("u" "g", "r", "i", "z", "y")
+FILTERS=("u" "g" "r" "i" "z" "y")
 SECOND_MOMENTS=("dT_T")
 
 # Animation parameters
