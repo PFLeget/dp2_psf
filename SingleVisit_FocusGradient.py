@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.collections import PatchCollection
 import pickle
+import treegp
 from lsst.daf.butler import Butler
 import lsst.afw.cameraGeom as cameraGeom
 from lsst.obs.lsst import LsstCam
@@ -182,7 +183,9 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
     # ============================================================
     plt.subplot(2, 2, 3)
 
-    for ccd in tqdm(ccdIds, desc="Processing CCDs"):
+    # First pass: build meanify for each CCD
+    meanify_dict = {}
+    for ccd in ccdIds:
         det = camera[ccd]
         filtreDetector = dic['detector'] == ccd
 
@@ -197,12 +200,28 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         # Subtract mean T for this CCD
         T_centered = T - np.mean(T)
 
-        # Convert to focal plane coordinates
-        fpx, fpy = pixel_to_focal(xCCD, yCCD, det)
+        # Create meanify for this CCD
+        meanify_dict[ccd] = treegp.meanify(bin_spacing=150, statistics="median")
+        coord = np.array([xCCD, yCCD]).T
+        meanify_dict[ccd].add_field(coord, T_centered)
 
-        # Plot T - <T>
-        plt.scatter(fpx, fpy, s=8, c=T_centered,
-                    cmap=plt.cm.seismic, vmin=-0.5, vmax=0.5)
+    # Second pass: meanify, plot, and compute correlations
+    for ccd in tqdm(meanify_dict.keys(), desc="Processing CCDs"):
+        det = camera[ccd]
+        meanify_dict[ccd].meanify()
+
+        # Get grid in focal plane coordinates for pcolormesh
+        x, y = np.meshgrid(meanify_dict[ccd]._xedge, meanify_dict[ccd]._yedge)
+        nBin0, nBin1 = np.shape(x)[0], np.shape(x)[1]
+        x = x.reshape(nBin0 * nBin1).astype(float)
+        y = y.reshape(nBin0 * nBin1).astype(float)
+        x, y = pixel_to_focal(x, y, det)
+        x = x.reshape((nBin0, nBin1))
+        y = y.reshape((nBin0, nBin1))
+
+        # Plot with pcolormesh
+        plt.pcolormesh(x, y, meanify_dict[ccd]._average,
+                       vmin=-0.5, vmax=0.5, cmap=plt.cm.seismic)
 
         # Get height map for this CCD
         FiltDet = np.array(tableSLAC['det']) == det.getName()
@@ -217,17 +236,23 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         # Get CCD corners for later use
         corners = get_ccd_corners_fp(det)
 
-        # Use KNN to interpolate height at star positions
+        # Get meanified coordinates in focal plane
+        CoordSubmit = meanify_dict[ccd].coords0
+        csx, csy = pixel_to_focal(CoordSubmit[:, 0].astype(float),
+                                   CoordSubmit[:, 1].astype(float), det)
+        CoordSubmit_fp = np.array([csx, csy]).T
+        T_binned = meanify_dict[ccd].params0
+
+        # Use KNN to interpolate height at binned star positions
         try:
             knn = KNeighborsRegressor(n_neighbors=min(20, len(coordSLAC)))
             knn.fit(coordSLAC, heightSLAC)
-            star_coords_fp = np.array([fpx, fpy]).T
-            height_at_stars = knn.predict(star_coords_fp)
+            height_at_bins = knn.predict(CoordSubmit_fp)
 
             # Compute correlation coefficient
-            valid = np.isfinite(T_centered) & np.isfinite(height_at_stars)
+            valid = np.isfinite(T_binned) & np.isfinite(height_at_bins)
             if np.sum(valid) > 10:
-                rho = np.corrcoef(height_at_stars[valid], T_centered[valid])[0, 1]
+                rho = np.corrcoef(height_at_bins[valid], T_binned[valid])[0, 1]
                 ccd_correlations[ccd] = rho
                 ccd_corners[ccd] = corners
         except Exception as e:
