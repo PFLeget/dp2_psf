@@ -132,7 +132,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
 
     # Prepare figure
     fig = plt.figure(figsize=(20, 20))
-    plt.subplots_adjust(top=0.95, wspace=0.25, hspace=0.15, right=0.99, left=0.07, bottom=0.05)
+    plt.subplots_adjust(top=0.95, wspace=0.25, hspace=0.15, right=0.95, left=0.07, bottom=0.05)
 
     # Store correlation coefficients per CCD
     ccd_correlations = {}
