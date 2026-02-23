@@ -177,6 +177,16 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
     # ============================================================
     plt.subplot(2, 2, 2)
 
+    # Draw CCD outlines from the visit
+    for ccd in ccdIds:
+        det = camera[ccd]
+        corners = get_ccd_corners_fp(det)
+        # Close the polygon
+        corners_closed = corners + [corners[0]]
+        xs = [c[0] for c in corners_closed]
+        ys = [c[1] for c in corners_closed]
+        plt.plot(xs, ys, 'k-', linewidth=0.5, alpha=0.5)
+
     if zernike_corners is not None and visit in zernike_corners:
         z4_corners = zernike_corners[visit].get('z4_corners', [])
         if z4_corners:
@@ -184,24 +194,26 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
             fpy_corners = [c['fpy'] for c in z4_corners]
             z4_vals = [c['value'] for c in z4_corners]
 
-            # Subtract mean z4 to show gradient
-            z4_mean = np.nanmean(z4_vals)
-            z4_centered = [v - z4_mean for v in z4_vals]
+            # Set color scale based on band
+            # Optimal z4: -0.2 for ugriz (range -0.6 to 0.2), 0 for y (range -0.4 to 0.4)
+            if band == 'y':
+                z4_vmin, z4_vmax = -0.4, 0.4
+            else:
+                z4_vmin, z4_vmax = -0.6, 0.2
 
-            sc = plt.scatter(fpx_corners, fpy_corners, c=z4_centered, s=800,
-                             cmap=plt.cm.seismic, vmin=-0.3, vmax=0.3,
+            sc = plt.scatter(fpx_corners, fpy_corners, c=z4_vals, s=800,
+                             cmap=plt.cm.seismic, vmin=z4_vmin, vmax=z4_vmax,
                              edgecolor='black', linewidth=2, marker='s')
 
             # Add labels with detector name and z4 value
             for corner in z4_corners:
-                z4_c = corner['value'] - z4_mean
-                plt.annotate(f"{corner['det_name']}\n$\\Delta z_4$={z4_c:.3f}",
+                plt.annotate(f"{corner['det_name']}\n$z_4$={corner['value']:.3f}",
                              (corner['fpx'], corner['fpy']),
                              textcoords="offset points", xytext=(0, 35),
                              ha='center', fontsize=10, fontweight='bold')
 
             cb = plt.colorbar(sc)
-            cb.set_label("$z_4 - <z_4>$ ($\\mu$m)", size=22)
+            cb.set_label("$z_4$ ($\\mu$m)", size=22)
             cb.ax.tick_params(labelsize=18)
 
             plt.xlim(-350, 350)
