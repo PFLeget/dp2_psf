@@ -146,7 +146,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
     # ============================================================
     # Panel 1 (2,2,1): Height map from SLAC
     # ============================================================
-    ax1 = plt.subplot(2, 2, 1)
+    plt.subplot(2, 2, 1)
 
     for ccd in ccdIds:
         det = camera[ccd]
@@ -157,33 +157,35 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         coordSLAC = np.array([np.array(tableSLAC['fpx'])[FiltDet],
                               np.array(tableSLAC['fpy'])[FiltDet]]).T
         heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - meanHeightDet
-        ax1.scatter(coordSLAC[:, 0], coordSLAC[:, 1], s=12, marker='s',
+        plt.scatter(coordSLAC[:, 0], coordSLAC[:, 1], s=12, marker='s',
                     c=heightSLAC, cmap=plt.cm.seismic, vmin=-0.005, vmax=0.005)
 
-    cb1 = plt.colorbar(ax=ax1)
-    cb1.set_label("z - <z> (mm)", size=22)
-    cb1.ax.tick_params(labelsize=18)
-    ax1.set_xlabel('x (mm)', size=22)
-    ax1.set_ylabel('y (mm)', size=22)
-    ax1.tick_params(labelsize=18)
-    ax1.set_title("Height map from SLAC", size=18)
-    ax1.set_aspect('equal')
+    cb = plt.colorbar()
+    cb.set_label("z - <z> (mm)", size=22)
+    cb.ax.tick_params(labelsize=18)
+    plt.xlabel('x (mm)', size=22)
+    plt.ylabel('y (mm)', size=22)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.title("Height map from SLAC", size=18)
+    plt.axis('equal')
 
     # ============================================================
     # Panel 2 (2,2,2): Placeholder for z4 corners
     # ============================================================
-    ax2 = plt.subplot(2, 2, 2)
-    ax2.text(0.5, 0.5, "z4 corner map\n(placeholder)",
-             ha='center', va='center', fontsize=20, transform=ax2.transAxes)
-    ax2.set_xlabel('x (mm)', size=22)
-    ax2.set_ylabel('y (mm)', size=22)
-    ax2.tick_params(labelsize=18)
-    ax2.set_title("Wavefront z4 at corners", size=18)
+    plt.subplot(2, 2, 2)
+    plt.text(0.5, 0.5, "z4 corner map\n(placeholder)",
+             ha='center', va='center', fontsize=20, transform=plt.gca().transAxes)
+    plt.xlabel('x (mm)', size=22)
+    plt.ylabel('y (mm)', size=22)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.title("Wavefront z4 at corners", size=18)
 
     # ============================================================
     # Panel 3 (2,2,3): Single visit T - <T> focal plane map
     # ============================================================
-    ax3 = plt.subplot(2, 2, 3)
+    plt.subplot(2, 2, 3)
 
     for ccd in tqdm(ccdIds, desc="Processing CCDs"):
         det = camera[ccd]
@@ -204,8 +206,8 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         fpx, fpy = pixel_to_focal(xCCD, yCCD, det)
 
         # Plot T - <T>
-        sc = ax3.scatter(fpx, fpy, s=8, c=T_centered,
-                         cmap=plt.cm.seismic, vmin=-0.5, vmax=0.5)
+        plt.scatter(fpx, fpy, s=8, c=T_centered,
+                    cmap=plt.cm.seismic, vmin=-0.5, vmax=0.5)
 
         # Get height map for this CCD
         FiltDet = np.array(tableSLAC['det']) == det.getName()
@@ -233,14 +235,15 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         except Exception as e:
             print(f"KNN failed for CCD {ccd}: {e}")
 
-    cb3 = plt.colorbar(sc, ax=ax3)
-    cb3.set_label("T - <T> (pixel$^2$)", size=22)
-    cb3.ax.tick_params(labelsize=18)
-    ax3.set_xlabel('x (mm)', size=22)
-    ax3.set_ylabel('y (mm)', size=22)
-    ax3.tick_params(labelsize=18)
-    ax3.set_title(f"Visit {visit} ({band}-band) | Star size residuals", size=18)
-    ax3.set_aspect('equal')
+    cb = plt.colorbar()
+    cb.set_label("T - <T> (pixel$^2$)", size=22)
+    cb.ax.tick_params(labelsize=18)
+    plt.xlabel('x (mm)', size=22)
+    plt.ylabel('y (mm)', size=22)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.title(f"Visit {visit} ({band}-band) | Star size residuals", size=18)
+    plt.axis('equal')
 
     # ============================================================
     # Panel 4 (2,2,4): Correlation coefficient map per CCD
@@ -270,15 +273,16 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         ax4.set_xlim(min(all_x) - 10, max(all_x) + 10)
         ax4.set_ylim(min(all_y) - 10, max(all_y) + 10)
 
-        cb4 = plt.colorbar(collection, ax=ax4)
-        cb4.set_label(r"$\rho$ (T, height)", size=22)
-        cb4.ax.tick_params(labelsize=18)
+        cb = plt.colorbar(collection)
+        cb.set_label(r"$\rho$ (T, height)", size=22)
+        cb.ax.tick_params(labelsize=18)
 
-    ax4.set_xlabel('x (mm)', size=22)
-    ax4.set_ylabel('y (mm)', size=22)
-    ax4.tick_params(labelsize=18)
-    ax4.set_title("Correlation: star size vs height per CCD", size=18)
-    ax4.set_aspect('equal')
+    plt.xlabel('x (mm)', size=22)
+    plt.ylabel('y (mm)', size=22)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.title("Correlation: star size vs height per CCD", size=18)
+    plt.axis('equal')
 
     # Add global correlation info
     all_rho = list(ccd_correlations.values())
