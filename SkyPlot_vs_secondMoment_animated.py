@@ -294,7 +294,7 @@ def create_animated_sky_plot(bands='g', visitMappingFile="data/visit_parquet_map
                         label=f"Last visit: {frame['last_visit_date']}")
 
         sp.draw_colorbar(label=ksm, fontsize=14, pad=0.02)
-        sp.ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.02), ncol=5, fontsize=9)
+        sp.ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.2), ncol=5, fontsize=12)
         sp.ax.set_title(f"DP2 {ksm} | bands: ({bands}) | N_visits: {frame['n_visits']} | Date: {frame['last_visit_date']}",
                         fontsize=16, y=1.05)
 
