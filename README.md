@@ -147,7 +147,7 @@ sacct -u $USER --state=FAILED --starttime=today
 ## Dependencies
 
 - LSST Science Pipelines (`lsst_distrib`)
-- `treegp` (for spatial averaging)
+- `treegp` (for spatial averaging | need to work on a dev branch `dev/pleget/meanifyStream`)
 - `polars` (for fast parquet reading)
 - `skyproj` (for sky projections)
 - `hpgeom` (for HEALPix operations)
