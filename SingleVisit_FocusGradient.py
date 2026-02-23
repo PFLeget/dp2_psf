@@ -363,6 +363,49 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
         cb.set_label(r"$\rho$ (T, height)", size=22)
         cb.ax.tick_params(labelsize=18)
 
+        # Compute gradient of correlation coefficient across focal plane
+        # Get CCD centers and their correlation values
+        ccd_centers_x = []
+        ccd_centers_y = []
+        ccd_rho_vals = []
+        for ccd, rho in ccd_correlations.items():
+            corners = ccd_corners[ccd]
+            center_x = np.mean([c[0] for c in corners])
+            center_y = np.mean([c[1] for c in corners])
+            ccd_centers_x.append(center_x)
+            ccd_centers_y.append(center_y)
+            ccd_rho_vals.append(rho)
+
+        ccd_centers_x = np.array(ccd_centers_x)
+        ccd_centers_y = np.array(ccd_centers_y)
+        ccd_rho_vals = np.array(ccd_rho_vals)
+
+        # Fit a plane: rho = a*x + b*y + c using least squares
+        # Design matrix: [x, y, 1]
+        valid_fit = np.isfinite(ccd_rho_vals)
+        if np.sum(valid_fit) > 3:
+            A = np.column_stack([ccd_centers_x[valid_fit],
+                                 ccd_centers_y[valid_fit],
+                                 np.ones(np.sum(valid_fit))])
+            coeffs, _, _, _ = np.linalg.lstsq(A, ccd_rho_vals[valid_fit], rcond=None)
+            grad_x, grad_y = coeffs[0], coeffs[1]
+
+            # Normalize the gradient
+            grad_norm = np.sqrt(grad_x**2 + grad_y**2)
+            if grad_norm > 0:
+                grad_x_norm = grad_x / grad_norm
+                grad_y_norm = grad_y / grad_norm
+
+                # Draw arrow at center of focal plane
+                arrow_scale = 100  # Length of arrow in mm
+                ax4.arrow(0, 0, grad_x_norm * arrow_scale, grad_y_norm * arrow_scale,
+                          head_width=20, head_length=15, fc='black', ec='black',
+                          linewidth=3, zorder=10)
+
+                # Add text showing gradient magnitude
+                ax4.text(0, -50, f"|$\\nabla \\rho$| = {grad_norm*1000:.2f} mm$^{{-1}}$",
+                         ha='center', va='top', fontsize=12, fontweight='bold')
+
     plt.xlabel('x (mm)', size=22)
     plt.ylabel('y (mm)', size=22)
     plt.xticks(fontsize=18)
