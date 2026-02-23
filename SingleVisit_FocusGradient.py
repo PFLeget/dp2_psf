@@ -100,8 +100,8 @@ def get_ccd_corners_fp(det):
     Returns list of (x, y) tuples for each corner.
     """
     bbox = det.getBBox()
-    corners_pix_x = np.array([bbox.getMinX(), bbox.getMaxX(), bbox.getMaxX(), bbox.getMinX()])
-    corners_pix_y = np.array([bbox.getMinY(), bbox.getMinY(), bbox.getMaxY(), bbox.getMaxY()])
+    corners_pix_x = np.array([bbox.getMinX(), bbox.getMaxX(), bbox.getMaxX(), bbox.getMinX()], dtype=float)
+    corners_pix_y = np.array([bbox.getMinY(), bbox.getMinY(), bbox.getMaxY(), bbox.getMaxY()], dtype=float)
 
     fpx, fpy = pixel_to_focal(corners_pix_x, corners_pix_y, det)
     corners_fp = list(zip(fpx, fpy))
