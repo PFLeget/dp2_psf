@@ -201,7 +201,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
         T_centered = T - np.mean(T)
 
         # Create meanify for this CCD
-        meanify_dict[ccd] = treegp.meanify(bin_spacing=150, statistics="median")
+        meanify_dict[ccd] = treegp.meanify(bin_spacing=500, statistics="median")
         coord = np.array([xCCD, yCCD]).T
         meanify_dict[ccd].add_field(coord, T_centered)
 
