@@ -97,19 +97,14 @@ def make_metrology_table(file="LSST_FP_cold_b_measurement_4col_bysurface.fits", 
 def get_ccd_corners_fp(det):
     """
     Get the 4 corners of a CCD in focal plane coordinates.
-    Returns corners as (x_min, x_max, y_min, y_max).
+    Returns list of (x, y) tuples for each corner.
     """
     bbox = det.getBBox()
-    corners_pix = [
-        (bbox.getMinX(), bbox.getMinY()),
-        (bbox.getMaxX(), bbox.getMinY()),
-        (bbox.getMaxX(), bbox.getMaxY()),
-        (bbox.getMinX(), bbox.getMaxY()),
-    ]
-    corners_fp = []
-    for cx, cy in corners_pix:
-        fpx, fpy = pixel_to_focal(np.array([cx]), np.array([cy]), det)
-        corners_fp.append((fpx[0], fpy[0]))
+    corners_pix_x = np.array([bbox.getMinX(), bbox.getMaxX(), bbox.getMaxX(), bbox.getMinX()])
+    corners_pix_y = np.array([bbox.getMinY(), bbox.getMinY(), bbox.getMaxY(), bbox.getMaxY()])
+
+    fpx, fpy = pixel_to_focal(corners_pix_x, corners_pix_y, det)
+    corners_fp = list(zip(fpx, fpy))
     return corners_fp
 
 
@@ -219,6 +214,9 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
                               np.array(tableSLAC['fpy'])[FiltDet]]).T
         heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - meanHeightDet
 
+        # Get CCD corners for later use
+        corners = get_ccd_corners_fp(det)
+
         # Use KNN to interpolate height at star positions
         try:
             knn = KNeighborsRegressor(n_neighbors=min(20, len(coordSLAC)))
@@ -231,7 +229,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
             if np.sum(valid) > 10:
                 rho = np.corrcoef(height_at_stars[valid], T_centered[valid])[0, 1]
                 ccd_correlations[ccd] = rho
-                ccd_corners[ccd] = get_ccd_corners_fp(det)
+                ccd_corners[ccd] = corners
         except Exception as e:
             print(f"KNN failed for CCD {ccd}: {e}")
 
