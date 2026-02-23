@@ -109,13 +109,19 @@ def get_ccd_corners_fp(det):
     return corners_fp
 
 
-def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
+def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zernikeCornersFile=None):
     """
     Analyze focus gradient for a single visit.
     """
     # Load visit mapping
     with open(visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
+
+    # Load zernike corners if provided
+    zernike_corners = None
+    if zernikeCornersFile is not None:
+        with open(zernikeCornersFile, 'rb') as f:
+            zernike_corners = pickle.load(f)
 
     if visit not in visit_mapping:
         raise ValueError(f"Visit {visit} not found in mapping file")
@@ -167,16 +173,61 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
     plt.axis('equal')
 
     # ============================================================
-    # Panel 2 (2,2,2): Placeholder for z4 corners
+    # Panel 2 (2,2,2): z4 at corner wavefront sensors
     # ============================================================
     plt.subplot(2, 2, 2)
-    plt.text(0.5, 0.5, "z4 corner map\n(placeholder)",
-             ha='center', va='center', fontsize=20, transform=plt.gca().transAxes)
+
+    if zernike_corners is not None and visit in zernike_corners:
+        z4_corners = zernike_corners[visit].get('z4_corners', [])
+        if z4_corners:
+            fpx_corners = [c['fpx'] for c in z4_corners]
+            fpy_corners = [c['fpy'] for c in z4_corners]
+            z4_vals = [c['value'] for c in z4_corners]
+
+            # Subtract mean z4 to show gradient
+            z4_mean = np.nanmean(z4_vals)
+            z4_centered = [v - z4_mean for v in z4_vals]
+
+            sc = plt.scatter(fpx_corners, fpy_corners, c=z4_centered, s=800,
+                             cmap=plt.cm.seismic, vmin=-0.3, vmax=0.3,
+                             edgecolor='black', linewidth=2, marker='s')
+
+            # Add labels with detector name and z4 value
+            for corner in z4_corners:
+                z4_c = corner['value'] - z4_mean
+                plt.annotate(f"{corner['det_name']}\n$\\Delta z_4$={z4_c:.3f}",
+                             (corner['fpx'], corner['fpy']),
+                             textcoords="offset points", xytext=(0, 35),
+                             ha='center', fontsize=10, fontweight='bold')
+
+            cb = plt.colorbar(sc)
+            cb.set_label("$z_4 - <z_4>$ ($\\mu$m)", size=22)
+            cb.ax.tick_params(labelsize=18)
+
+            plt.xlim(-350, 350)
+            plt.ylim(-350, 350)
+        else:
+            plt.text(0.5, 0.5, "No z4 corner data\nfor this visit",
+                     ha='center', va='center', fontsize=16, transform=plt.gca().transAxes)
+    else:
+        plt.text(0.5, 0.5, "z4 corner file\nnot provided",
+                 ha='center', va='center', fontsize=16, transform=plt.gca().transAxes)
+
     plt.xlabel('x (mm)', size=22)
     plt.ylabel('y (mm)', size=22)
     plt.xticks(fontsize=18)
     plt.yticks(fontsize=18)
-    plt.title("Wavefront z4 at corners", size=18)
+    # Set title based on whether we have z4 data
+    if zernike_corners is not None and visit in zernike_corners:
+        z4_corners_data = zernike_corners[visit].get('z4_corners', [])
+        if z4_corners_data:
+            z4_mean_title = np.nanmean([c['value'] for c in z4_corners_data])
+            plt.title(f"Wavefront $z_4$ at corners | $<z_4>$={z4_mean_title:.3f} $\\mu$m", size=18)
+        else:
+            plt.title("Wavefront $z_4$ at corners", size=18)
+    else:
+        plt.title("Wavefront $z_4$ at corners", size=18)
+    plt.axis('equal')
 
     # ============================================================
     # Panel 3 (2,2,3): Single visit T - <T> focal plane map
@@ -326,6 +377,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot):
 def main():
     defaultFitHeightMap = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/LSST_FP_cold_b_measurement_4col_bysurface.fits"
     defaultVisitMappingFile = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl"
+    defaultZernikeCornersFile = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_zernike_corners.pkl"
     defaultRepOutPlot = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/plots/"
 
     parser = argparse.ArgumentParser(description="Single visit focus gradient analysis")
@@ -334,6 +386,8 @@ def main():
                         help="Path to visit_parquet_mapping.pkl file")
     parser.add_argument('--fitHeightMap', type=str, default=defaultFitHeightMap,
                         help="Path to SLAC height map FITS file")
+    parser.add_argument('--zernikeCornersFile', type=str, default=defaultZernikeCornersFile,
+                        help="Path to visit_zernike_corners.pkl file")
     parser.add_argument('--repOutPlot', type=str, default=defaultRepOutPlot,
                         help="Output directory for plots")
 
@@ -344,6 +398,7 @@ def main():
         visitMappingFile=args.visitMappingFile,
         fitHeightMap=args.fitHeightMap,
         repOutPlot=args.repOutPlot,
+        zernikeCornersFile=args.zernikeCornersFile,
     )
 
 
