@@ -239,7 +239,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
                               linewidth=3, zorder=10)
 
                     # Add text showing gradient magnitude
-                    plt.text(0, -50, f"|$\\nabla z_4$| = {grad_norm*1000:.3f} $\\mu$m/mm",
+                    plt.text(0, -50, f"|$\\nabla z_4$| = {grad_norm:.2e} $\\mu$m/mm",
                              ha='center', va='top', fontsize=12, fontweight='bold')
 
             cb = plt.colorbar(sc)
@@ -433,7 +433,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
                           linewidth=3, zorder=10)
 
                 # Add text showing gradient magnitude
-                ax4.text(0, -50, f"|$\\nabla \\rho$| = {grad_norm*1000:.2f} mm$^{{-1}}$",
+                ax4.text(0, -50, f"|$\\nabla \\rho$| = {grad_norm:.2e} mm$^{{-1}}$",
                          ha='center', va='top', fontsize=12, fontweight='bold')
 
     plt.xlabel('x (mm)', size=22)
