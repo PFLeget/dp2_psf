@@ -27,6 +27,8 @@ Data is accessed via a mapping file (`visit_parquet_mapping.pkl`) that stores pa
 | Script | Description |
 |--------|-------------|
 | `getData.py` | Creates `visit_parquet_mapping.pkl` mapping visit IDs to parquet file paths |
+| `getZernike.ipynb` | Queries consdb for Zernike coefficients, creates `visit_to_band_mapv2.pkl` |
+| `getZernike_withCorners.ipynb` | Same as above + creates `visit_zernike_corners.pkl` with corner positions |
 
 ### Analysis Scripts
 
@@ -36,6 +38,7 @@ Data is accessed via a mapping file (`visit_parquet_mapping.pkl`) that stores pa
 | `FoVPlot_vs_heightMap.py` | Correlation between PSF residuals and Zernike wavefront coefficients |
 | `SkyPlot_vs_secondMoment.py` | Sky coordinate (HEALPix) maps of PSF residuals |
 | `SkyPlot_vs_secondMoment_animated.py` | Animated sky maps showing temporal evolution of residuals |
+| `SingleVisit_FocusGradient.py` | Per-visit focus gradient analysis: correlates star size with height map |
 
 ### SLURM Submission Scripts
 
@@ -45,6 +48,7 @@ Data is accessed via a mapping file (`visit_parquet_mapping.pkl`) that stores pa
 | `submit_FoVPlot_jobs.sh` | Submit FoVPlot_vs_heightMap jobs |
 | `submit_SkyPlot_secondMoment_jobs.sh` | Submit SkyPlot_vs_secondMoment jobs |
 | `submit_SkyPlot_animated_jobs.sh` | Submit animated sky plot jobs |
+| `submit_SingleVisit_FocusGradient_jobs.sh` | Submit single visit focus gradient jobs (100 visits/job) |
 
 ## Usage
 
@@ -101,6 +105,22 @@ python SkyPlot_vs_secondMoment_animated.py \
     --repOutPlot plots/
 ```
 
+**Single visit focus gradient analysis:**
+```bash
+python SingleVisit_FocusGradient.py \
+    --visit 2024110800256 \
+    --visitMappingFile data/visit_parquet_mapping.pkl \
+    --fitHeightMap data/LSST_FP_cold_b_measurement_4col_bysurface.fits \
+    --zernikeCornersFile data/visit_zernike_corners.pkl \
+    --repOutPlot plots/focus_gradient/
+```
+
+This creates a 4-panel plot showing:
+1. Height map from SLAC metrology
+2. z4 wavefront at corner sensors (with gradient direction)
+3. Star size residuals (T - <T>) per CCD
+4. Correlation coefficient between height and star size per CCD (with gradient direction)
+
 #### SLURM Execution (S3DF)
 
 Before running, update the paths in the submission scripts:
@@ -120,6 +140,9 @@ bash submit_SkyPlot_secondMoment_jobs.sh
 
 # Submit animated sky plot jobs (6 bands x 1 moment = 6 jobs)
 bash submit_SkyPlot_animated_jobs.sh
+
+# Submit single visit focus gradient jobs (100 visits per job)
+bash submit_SingleVisit_FocusGradient_jobs.sh
 ```
 
 ### SLURM Job Management
@@ -163,14 +186,22 @@ setup lsst_distrib -t d_latest
 
 ```
 dp2_psf/
-├── data/                    # Visit mapping pickle file
-├── plots/                   # Output plots and videos
-├── logs/                    # SLURM job logs
-├── getData.py               # Create visit mapping
+├── data/
+│   ├── visit_parquet_mapping.pkl      # Visit ID to parquet file mapping
+│   ├── visit_to_band_mapv2.pkl        # Zernike coefficients per visit
+│   ├── visit_zernike_corners.pkl      # Zernike at corner positions
+│   └── LSST_FP_cold_b_measurement_4col_bysurface.fits  # SLAC height map
+├── plots/                             # Output plots and videos
+│   └── focus_gradient/                # Single visit focus gradient plots
+├── logs/                              # SLURM job logs
+├── getData.py                         # Create visit mapping
+├── getZernike.ipynb                   # Query Zernike from consdb
+├── getZernike_withCorners.ipynb       # Query Zernike with corner positions
 ├── FoVPlot_vs_secondMoment.py
 ├── FoVPlot_vs_heightMap.py
 ├── SkyPlot_vs_secondMoment.py
 ├── SkyPlot_vs_secondMoment_animated.py
-├── submit_*.sh              # SLURM submission scripts
+├── SingleVisit_FocusGradient.py       # Per-visit focus gradient analysis
+├── submit_*.sh                        # SLURM submission scripts
 └── README.md
 ```
