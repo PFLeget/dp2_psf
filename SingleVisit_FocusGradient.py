@@ -145,6 +145,20 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
     ccd_correlations = {}
     ccd_corners = {}
 
+    # Store gradient results for output
+    gradient_results = {
+        'visit': visit,
+        'band': band,
+        'z4_gradient_norm': np.nan,
+        'z4_gradient_x': np.nan,
+        'z4_gradient_y': np.nan,
+        'z4_mean': np.nan,
+        'rho_gradient_norm': np.nan,
+        'rho_gradient_x': np.nan,
+        'rho_gradient_y': np.nan,
+        'rho_median': np.nan,
+    }
+
     # ============================================================
     # Panel 1 (2,2,1): Height map from SLAC
     # ============================================================
@@ -217,6 +231,9 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
             fpy_arr = np.array(fpy_corners)
             z4_arr = np.array(z4_vals)
 
+            # Store mean z4
+            gradient_results['z4_mean'] = np.nanmean(z4_arr)
+
             # Fit a plane: z4 = a*x + b*y + c using least squares
             valid_fit = np.isfinite(z4_arr)
             if np.sum(valid_fit) > 3:
@@ -228,6 +245,12 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
 
                 # Normalize the gradient
                 grad_norm = np.sqrt(grad_x**2 + grad_y**2)
+
+                # Store gradient info
+                gradient_results['z4_gradient_norm'] = grad_norm
+                gradient_results['z4_gradient_x'] = grad_x
+                gradient_results['z4_gradient_y'] = grad_y
+
                 if grad_norm > 0:
                     grad_x_norm = grad_x / grad_norm
                     grad_y_norm = grad_y / grad_norm
@@ -422,6 +445,12 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
 
             # Normalize the gradient
             grad_norm = np.sqrt(grad_x**2 + grad_y**2)
+
+            # Store gradient info
+            gradient_results['rho_gradient_norm'] = grad_norm
+            gradient_results['rho_gradient_x'] = grad_x
+            gradient_results['rho_gradient_y'] = grad_y
+
             if grad_norm > 0:
                 grad_x_norm = grad_x / grad_norm
                 grad_y_norm = grad_y / grad_norm
@@ -447,6 +476,7 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
     all_rho = list(ccd_correlations.values())
     if all_rho:
         median_rho = np.median(all_rho)
+        gradient_results['rho_median'] = median_rho
         fig.suptitle(f"Visit {visit} | Band: {band} | Median $\\rho$ = {median_rho:.3f}",
                      fontsize=22, y=0.98)
 
@@ -456,7 +486,13 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
     plt.close()
     print(f"Saved: {output_file}")
 
-    return ccd_correlations
+    # Save gradient results to pickle
+    results_file = os.path.join(repOutPlot, f'focus_gradient_visit_{visit}.pkl')
+    with open(results_file, 'wb') as f:
+        pickle.dump(gradient_results, f)
+    print(f"Saved results: {results_file}")
+
+    return gradient_results
 
 
 def main():
