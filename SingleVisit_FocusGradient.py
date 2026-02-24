@@ -212,6 +212,36 @@ def analyze_single_visit(visit, visitMappingFile, fitHeightMap, repOutPlot, zern
                              textcoords="offset points", xytext=(0, 35),
                              ha='center', fontsize=10, fontweight='bold')
 
+            # Compute gradient of z4 across focal plane
+            fpx_arr = np.array(fpx_corners)
+            fpy_arr = np.array(fpy_corners)
+            z4_arr = np.array(z4_vals)
+
+            # Fit a plane: z4 = a*x + b*y + c using least squares
+            valid_fit = np.isfinite(z4_arr)
+            if np.sum(valid_fit) > 3:
+                A = np.column_stack([fpx_arr[valid_fit],
+                                     fpy_arr[valid_fit],
+                                     np.ones(np.sum(valid_fit))])
+                coeffs, _, _, _ = np.linalg.lstsq(A, z4_arr[valid_fit], rcond=None)
+                grad_x, grad_y = coeffs[0], coeffs[1]
+
+                # Normalize the gradient
+                grad_norm = np.sqrt(grad_x**2 + grad_y**2)
+                if grad_norm > 0:
+                    grad_x_norm = grad_x / grad_norm
+                    grad_y_norm = grad_y / grad_norm
+
+                    # Draw arrow at center of focal plane
+                    arrow_scale = 100  # Length of arrow in mm
+                    plt.arrow(0, 0, grad_x_norm * arrow_scale, grad_y_norm * arrow_scale,
+                              head_width=20, head_length=15, fc='black', ec='black',
+                              linewidth=3, zorder=10)
+
+                    # Add text showing gradient magnitude
+                    plt.text(0, -50, f"|$\\nabla z_4$| = {grad_norm*1000:.3f} $\\mu$m/mm",
+                             ha='center', va='top', fontsize=12, fontweight='bold')
+
             cb = plt.colorbar(sc)
             cb.set_label("$z_4$ ($\\mu$m)", size=22)
             cb.ax.tick_params(labelsize=18)
