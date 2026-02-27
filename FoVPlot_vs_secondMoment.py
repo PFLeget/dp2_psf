@@ -28,6 +28,7 @@ PARQUET_COLUMNS = [
     'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
     'coord_ra', 'coord_dec', 'slot_Centroid_x', 'slot_Centroid_y',
     'detector', 'psf_max_value', 'calib_psf_reserved',
+    'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
 ]
 
 
@@ -65,6 +66,11 @@ def load_visit_data(parquet_path):
     e1_psf = (slot_PsfShape_xx - slot_PsfShape_yy) / T_psf
     e2_psf = 2 * slot_PsfShape_xy / T_psf
 
+    # Compute SNR
+    flux = table['base_GaussianFlux_instFlux'].to_numpy()
+    flux_err = table['base_GaussianFlux_instFluxErr'].to_numpy()
+    snr = flux / flux_err
+
     return {
         'ixx_src': slot_Shape_xx,
         'iyy_src': slot_Shape_yy,
@@ -82,6 +88,7 @@ def load_visit_data(parquet_path):
         'detector': table['detector'].to_numpy(),
         'psf_max_value': table['psf_max_value'].to_numpy(),
         'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
+        'snr': snr,
     }
 
 
@@ -110,7 +117,8 @@ def plot_FoV_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
                            repOutPlot='plots/',
                            key_second_moment='dT_T', bin_spacing=150, colorScale=0.005,
                            autoColorScale=False, autoColorScaleCst=2., statisticsMedian=False,
-                           colorlabel=None, title=None, pklInput=None, psf_max_value=0):
+                           colorlabel=None, title=None, pklInput=None, psf_max_value=0,
+                           snr_min=0):
     """
     Plot spatial variation of PSF second moments on the focal plane.
 
@@ -142,6 +150,8 @@ def plot_FoV_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         Path to pre-computed pickle file (to redo plot only)
     psf_max_value : float
         Exclude PSFs with max pixel value below this threshold
+    snr_min : float
+        Minimum SNR threshold (base_GaussianFlux_instFlux / base_GaussianFlux_instFluxErr)
     """
 
     CMAP = plt.cm.inferno
@@ -169,7 +179,10 @@ def plot_FoV_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
 
             for ccd in ccdIds:
                 filtering = (data["detector"] == ccd)
-                filtering &= (data["psf_max_value"] > psf_max_value)
+                if psf_max_value > 0:
+                    filtering &= (data["psf_max_value"] > psf_max_value)
+                if snr_min > 0:
+                    filtering &= (data["snr"] > snr_min)
                 coord = np.array([data['xCCD'], data['yCCD']]).T
                 if ccd not in meanifyStream:
                     if not statisticsMedian:
@@ -249,10 +262,11 @@ def plot_FoV_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         median_key = "median"
     else:
         median_key = ""
-    plt.savefig(os.path.join(repOutPlot, f'{key_second_moment}_2d_{bands}_{int(bin_spacing)}_{median_key}_{int(psf_max_value)}.png'))
+    output_name = f'{key_second_moment}_2d_{bands}_{int(bin_spacing)}_{median_key}_psfmax{int(psf_max_value)}_snr{int(snr_min)}'
+    plt.savefig(os.path.join(repOutPlot, f'{output_name}.png'))
 
     if pklInput is None:
-        pklFile = open(os.path.join(repOutPlot, f'{key_second_moment}_2d_{bands}_{int(bin_spacing)}_{median_key}_{int(psf_max_value)}.pkl'), 'wb')
+        pklFile = open(os.path.join(repOutPlot, f'{output_name}.pkl'), 'wb')
         pickle.dump(dicMeanifyPlot, pklFile)
         pklFile.close()
 
@@ -266,6 +280,7 @@ def main():
     parser.add_argument('--key_second_moment', type=str, default='dT_T', help='second moment key')
     parser.add_argument('--bin_spacing', type=float, default=150, help='bin size in pixels')
     parser.add_argument('--psf_max_value', type=float, default=0, help='exclude PSFs with max pixel value below this (e-)')
+    parser.add_argument('--snr_min', type=float, default=0, help='minimum SNR threshold (default: 0 = no cut)')
     parser.add_argument('--colorScale', type=float, default=0.005, help='Min/Max of color scale')
     parser.add_argument('--autoColorScaleCst', type=float, default=2., help='Number of sigma for auto color scale')
     parser.add_argument('--repOutPlot', type=str, default='plots/', help='Output directory for plots')
@@ -281,7 +296,8 @@ def main():
                            key_second_moment=args.key_second_moment, bin_spacing=args.bin_spacing,
                            colorScale=args.colorScale, autoColorScale=args.autoColorScale,
                            autoColorScaleCst=args.autoColorScaleCst, statisticsMedian=args.statisticsMedian,
-                           colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value)
+                           colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value,
+                           snr_min=args.snr_min)
 
 
 if __name__ == "__main__":

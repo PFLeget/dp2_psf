@@ -58,43 +58,52 @@ def load_visit_data(parquet_path):
 class meanify1D_wrms():
     """
     Take data, build a 1D average with weighted RMS.
-    Adapted from Pierre Astier's analysis code.
+    O(1) memory implementation - keeps running sum/count per bin.
     """
-    def __init__(self, bin_spacing=0.3):
+    def __init__(self, bin_spacing=0.3, x_min=0, x_max=1000):
         self.bin_spacing = bin_spacing
-        self.coords = []
-        self.params = []
+        self.x_min = x_min
+        self.x_max = x_max
+
+        # Pre-allocate bins
+        self.nbin = int((x_max - x_min) / bin_spacing) + 1
+        self.binning = np.linspace(x_min, x_max, self.nbin)
+
+        # Running statistics per bin (O(1) memory)
+        self._sum = np.zeros(self.nbin - 1)
+        self._sum_sq = np.zeros(self.nbin - 1)
+        self._count = np.zeros(self.nbin - 1)
+
+        # Bin centers
+        self.x0 = self.binning[:-1] + (self.binning[1] - self.binning[0]) / 2.0
 
     def add_data(self, coord, param):
-        """Add new data to compute the mean function."""
-        self.coords.append(coord)
-        self.params.append(param)
+        """Add new data - accumulates directly into bins (O(1) memory)."""
+        # Filter valid data
+        valid = np.isfinite(coord) & np.isfinite(param)
+        coord = coord[valid]
+        param = param[valid]
 
-    def meanify(self, x_min=None, x_max=None):
-        """Compute the mean function."""
-        params = np.concatenate(self.params)
-        coords = np.concatenate(self.coords)
+        # Find bin indices for each data point
+        bin_indices = np.digitize(coord, self.binning) - 1
 
-        if x_min is None:
-            x_min = np.nanmin(coords)
-        if x_max is None:
-            x_max = np.nanmax(coords)
+        # Clip to valid bin range
+        valid_bins = (bin_indices >= 0) & (bin_indices < self.nbin - 1)
+        bin_indices = bin_indices[valid_bins]
+        param = param[valid_bins]
 
-        nbin = int((x_max - x_min) / self.bin_spacing) + 1
-        binning = np.linspace(x_min, x_max, nbin)
+        # Accumulate into bins
+        np.add.at(self._sum, bin_indices, param)
+        np.add.at(self._sum_sq, bin_indices, param ** 2)
+        np.add.at(self._count, bin_indices, 1)
 
-        average, x0, _ = binned_statistic(coords, params, bins=binning, statistic='mean')
-        std, _, _ = binned_statistic(coords, params, bins=binning, statistic='std')
-        count, _, _ = binned_statistic(coords, params, bins=binning, statistic='count')
-
-        # Get center of each bin
-        x0 = x0[:-1] + (x0[1] - x0[0]) / 2.0
-
-        self.x0 = x0
-        self.average = average
-        self.std = std
-        self.count = count
-        self.binning = binning
+    def meanify(self):
+        """Compute final statistics from accumulated sums."""
+        with np.errstate(divide='ignore', invalid='ignore'):
+            self.average = self._sum / self._count
+            variance = (self._sum_sq / self._count) - (self.average ** 2)
+            self.std = np.sqrt(variance)
+            self.count = self._count
 
 
 def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
@@ -122,8 +131,8 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
 
     print(f"Selected {len(selected_visits)} visits for bands: {bands}")
 
-    # Initialize meanify
-    meanify = meanify1D_wrms(bin_spacing=bin_spacing)
+    # Initialize meanify with SNR bounds for O(1) memory binning
+    meanify = meanify1D_wrms(bin_spacing=bin_spacing, x_min=snr_min, x_max=snr_max)
 
     # Load all data
     all_snr = []
@@ -149,7 +158,7 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
             print(f"Failed to load visit {visit}: {e}")
 
     # Compute binned statistics
-    meanify.meanify(x_min=snr_min, x_max=snr_max)
+    meanify.meanify()
 
     # Concatenate all data for histogram
     all_snr = np.concatenate(all_snr)
