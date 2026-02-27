@@ -4,9 +4,11 @@
 # Loops over bands and optionally over x-axis modes (SNR or psf_max)
 #
 # Usage:
-#   ./submit_SNR_vs_dT_jobs.sh           # Submit SNR mode jobs
-#   ./submit_SNR_vs_dT_jobs.sh --psf_max # Submit psf_max mode jobs
-#   ./submit_SNR_vs_dT_jobs.sh --both    # Submit both SNR and psf_max jobs
+#   ./submit_SNR_vs_dT_jobs.sh                        # Submit SNR mode jobs
+#   ./submit_SNR_vs_dT_jobs.sh --psf_max              # Submit psf_max mode jobs
+#   ./submit_SNR_vs_dT_jobs.sh --both                 # Submit both SNR and psf_max jobs
+#   ./submit_SNR_vs_dT_jobs.sh --exclude_crowded      # Exclude MW/LMC/SMC regions
+#   ./submit_SNR_vs_dT_jobs.sh --both --exclude_crowded  # Combine options
 #
 
 # Configuration
@@ -25,13 +27,23 @@ BANDS=("u" "g" "r" "i" "z" "y")
 # Parse arguments
 USE_PSF_MAX=false
 USE_SNR=true
-if [[ "$1" == "--psf_max" ]]; then
-    USE_PSF_MAX=true
-    USE_SNR=false
-elif [[ "$1" == "--both" ]]; then
-    USE_PSF_MAX=true
-    USE_SNR=true
-fi
+EXCLUDE_CROWDED=""
+
+for arg in "$@"; do
+    case $arg in
+        --psf_max)
+            USE_PSF_MAX=true
+            USE_SNR=false
+            ;;
+        --both)
+            USE_PSF_MAX=true
+            USE_SNR=true
+            ;;
+        --exclude_crowded)
+            EXCLUDE_CROWDED="--exclude_crowded"
+            ;;
+    esac
+done
 
 # Counter for submitted jobs
 job_count=0
@@ -55,8 +67,8 @@ if [[ "$USE_SNR" == true ]]; then
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --output=${LOG_DIR}/${JOB_NAME}_%j.out
 #SBATCH --error=${LOG_DIR}/${JOB_NAME}_%j.err
 
@@ -77,7 +89,7 @@ echo "=================================================="
 python ${SCRIPT_NAME} \\
     --bands ${band} \\
     --visitMappingFile "${VISIT_MAPPING_FILE}" \\
-    --repOutPlot "${REP_OUT_PLOT}"
+    --repOutPlot "${REP_OUT_PLOT}" ${EXCLUDE_CROWDED}
 
 echo "=================================================="
 echo "Job completed at: \$(date)"
@@ -128,7 +140,7 @@ python ${SCRIPT_NAME} \\
     --bands ${band} \\
     --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --repOutPlot "${REP_OUT_PLOT}" \\
-    --use_psf_max
+    --use_psf_max ${EXCLUDE_CROWDED}
 
 echo "=================================================="
 echo "Job completed at: \$(date)"

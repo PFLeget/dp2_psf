@@ -16,12 +16,70 @@ import pickle
 import argparse
 from scipy.stats import binned_statistic
 
+# For galactic coordinate transformation
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
+
+# LMC and SMC centers (J2000)
+LMC_RA, LMC_DEC = 80.9, -69.8  # degrees
+SMC_RA, SMC_DEC = 13.2, -72.8  # degrees
+
+
+def filter_crowded_regions(ra_deg, dec_deg, galactic_b_min=20., lmc_radius=10., smc_radius=5.):
+    """
+    Filter out stars in crowded regions: Milky Way plane, LMC, SMC.
+
+    Parameters
+    ----------
+    ra_deg : array
+        Right ascension in degrees
+    dec_deg : array
+        Declination in degrees
+    galactic_b_min : float
+        Minimum absolute galactic latitude |b| to keep (degrees).
+        Stars with |b| < galactic_b_min are excluded.
+    lmc_radius : float
+        Radius around LMC to exclude (degrees)
+    smc_radius : float
+        Radius around SMC to exclude (degrees)
+
+    Returns
+    -------
+    mask : boolean array
+        True for stars to KEEP (outside crowded regions)
+    """
+    # Convert to astropy SkyCoord
+    coords = SkyCoord(ra=ra_deg * u.degree, dec=dec_deg * u.degree, frame='icrs')
+
+    # Get galactic latitude
+    galactic_b = coords.galactic.b.degree
+
+    # Filter Milky Way: keep stars with |b| > galactic_b_min
+    mask_mw = np.abs(galactic_b) > galactic_b_min
+
+    # Filter LMC: angular distance from LMC center
+    lmc_center = SkyCoord(ra=LMC_RA * u.degree, dec=LMC_DEC * u.degree, frame='icrs')
+    sep_lmc = coords.separation(lmc_center).degree
+    mask_lmc = sep_lmc > lmc_radius
+
+    # Filter SMC: angular distance from SMC center
+    smc_center = SkyCoord(ra=SMC_RA * u.degree, dec=SMC_DEC * u.degree, frame='icrs')
+    sep_smc = coords.separation(smc_center).degree
+    mask_smc = sep_smc > smc_radius
+
+    # Combine: keep only stars that pass ALL filters
+    mask = mask_mw & mask_lmc & mask_smc
+
+    return mask
+
 
 # Columns to read from parquet files
 PARQUET_COLUMNS = [
     'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
     'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
     'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
+    'coord_ra', 'coord_dec',
     'detector', 'calib_psf_reserved', 'psf_max_value',
 ]
 
@@ -51,6 +109,8 @@ def load_visit_data(parquet_path):
         'dT_T': dT_T,
         'snr': snr,
         'psf_max_value': table['psf_max_value'].to_numpy(),
+        'ra': table['coord_ra'].to_numpy(),
+        'dec': table['coord_dec'].to_numpy(),
         'detector': table['detector'].to_numpy(),
         'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
     }
@@ -109,7 +169,8 @@ class meanify1D_wrms():
 
 def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
                    repOutPlot='plots/', x_min=None, x_max=None, bin_spacing=None,
-                   n_visits=None, use_psf_max=False):
+                   n_visits=None, use_psf_max=False,
+                   exclude_crowded=False, galactic_b_min=20., lmc_radius=10., smc_radius=5.):
     """
     Create a plot showing:
     - Top panel: distribution of SNR (or psf_max_value)
@@ -119,6 +180,14 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
     ----------
     use_psf_max : bool
         If True, use psf_max_value instead of SNR for the x-axis.
+    exclude_crowded : bool
+        If True, exclude stars in MW plane, LMC, and SMC
+    galactic_b_min : float
+        Minimum |b| to keep when exclude_crowded=True (degrees)
+    lmc_radius : float
+        Radius around LMC to exclude (degrees)
+    smc_radius : float
+        Radius around SMC to exclude (degrees)
     """
     # Set defaults based on x-axis type
     if use_psf_max:
@@ -137,6 +206,10 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
         x_label = 'SNR (base_GaussianFlux_instFlux / base_GaussianFlux_instFluxErr)'
         x_low, x_high = 50, 1000  # Reference lines for SNR
         file_suffix = f'SNR_vs_dT_T_{bands}'
+
+    # Add suffix for crowded region exclusion
+    if exclude_crowded:
+        file_suffix += '_noCrowded'
 
     # Load the visit mapping
     with open(visitMappingFile, 'rb') as f:
@@ -169,6 +242,18 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
             x_data = data[x_col]
             valid = np.isfinite(x_data) & np.isfinite(data['dT_T'])
             valid &= (x_data > x_min) & (x_data < x_max)
+
+            # Filter crowded regions (MW, LMC, SMC) if requested
+            if exclude_crowded:
+                ra_deg = np.degrees(data['ra'])
+                dec_deg = np.degrees(data['dec'])
+                mask_crowded = filter_crowded_regions(
+                    ra_deg, dec_deg,
+                    galactic_b_min=galactic_b_min,
+                    lmc_radius=lmc_radius,
+                    smc_radius=smc_radius
+                )
+                valid &= mask_crowded
 
             if np.sum(valid) > 0:
                 x_vals = x_data[valid]
@@ -251,6 +336,10 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
         'dT_T_mean': meanify.average,
         'dT_T_std': meanify.std,
         'dT_T_count': meanify.count,
+        'exclude_crowded': exclude_crowded,
+        'galactic_b_min': galactic_b_min if exclude_crowded else None,
+        'lmc_radius': lmc_radius if exclude_crowded else None,
+        'smc_radius': smc_radius if exclude_crowded else None,
     }
     results_file = os.path.join(repOutPlot, f'{file_suffix}.pkl')
     with open(results_file, 'wb') as f:
@@ -280,6 +369,16 @@ def main():
     parser.add_argument('--use_psf_max', action='store_true',
                         help="Use psf_max_value instead of SNR for x-axis")
 
+    # Crowded region filtering
+    parser.add_argument('--exclude_crowded', action='store_true',
+                        help='Exclude MW plane, LMC, and SMC')
+    parser.add_argument('--galactic_b_min', type=float, default=20.,
+                        help='Min |b| to keep when excluding MW (degrees, default: 20)')
+    parser.add_argument('--lmc_radius', type=float, default=10.,
+                        help='Radius around LMC to exclude (degrees, default: 10)')
+    parser.add_argument('--smc_radius', type=float, default=5.,
+                        help='Radius around SMC to exclude (degrees, default: 5)')
+
     args = parser.parse_args()
 
     plot_snr_vs_dT(
@@ -291,6 +390,10 @@ def main():
         bin_spacing=args.bin_spacing,
         n_visits=args.n_visits,
         use_psf_max=args.use_psf_max,
+        exclude_crowded=args.exclude_crowded,
+        galactic_b_min=args.galactic_b_min,
+        lmc_radius=args.lmc_radius,
+        smc_radius=args.smc_radius,
     )
 
 
