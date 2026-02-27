@@ -162,6 +162,10 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
     plt.subplots_adjust(left=0.12, bottom=0.08, top=0.95, right=0.95, hspace=0)
     gs = gridspec.GridSpec(2, 1, height_ratios=[1, 2])
 
+    # SNR limits of interest
+    SNR_LOW = 50
+    SNR_HIGH = 1000
+
     # Top panel: SNR distribution
     ax1 = plt.subplot(gs[0])
     ax1.hist(all_snr, bins=meanify.binning, color='b', alpha=0.7, edgecolor='black', linewidth=0.5)
@@ -170,6 +174,11 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
     ax1.set_xlim(snr_min, snr_max)
     ax1.tick_params(labelbottom=False)
     ax1.set_title(f"DP2 | Band: {bands} | N_visits: {len(selected_visits)} | N_stars: {len(all_snr):,}", fontsize=14)
+
+    # Add SNR limit lines to top panel
+    ax1.axvline(SNR_LOW, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_LOW}')
+    ax1.axvline(SNR_HIGH, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_HIGH}')
+    ax1.legend(loc='upper right', fontsize=10)
 
     # Bottom panel: dT/T vs SNR
     ax2 = plt.subplot(gs[1])
@@ -186,6 +195,10 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
     ax2.axhline(0, color='k', linestyle='--', linewidth=1, zorder=1)
     ax2.fill_between(xlim, -0.004, 0.004, color='g', alpha=0.2, zorder=0, label='0.4% requirement')
     ax2.fill_between(xlim, -0.001, 0.001, color='g', alpha=0.3, zorder=0, label='0.1% goal')
+
+    # Add SNR limit lines to bottom panel
+    ax2.axvline(SNR_LOW, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_LOW}')
+    ax2.axvline(SNR_HIGH, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_HIGH}')
 
     ax2.set_xlim(xlim)
     ax2.set_ylim(-0.02, 0.02)
