@@ -22,7 +22,7 @@ PARQUET_COLUMNS = [
     'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
     'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
     'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
-    'detector', 'calib_psf_reserved',
+    'detector', 'calib_psf_reserved', 'psf_max_value',
 ]
 
 
@@ -50,6 +50,7 @@ def load_visit_data(parquet_path):
     return {
         'dT_T': dT_T,
         'snr': snr,
+        'psf_max_value': table['psf_max_value'].to_numpy(),
         'detector': table['detector'].to_numpy(),
         'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
     }
@@ -107,13 +108,35 @@ class meanify1D_wrms():
 
 
 def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
-                   repOutPlot='plots/', snr_min=10, snr_max=1000, bin_spacing=20,
-                   n_visits=None):
+                   repOutPlot='plots/', x_min=None, x_max=None, bin_spacing=None,
+                   n_visits=None, use_psf_max=False):
     """
     Create a plot showing:
-    - Top panel: distribution of SNR
-    - Bottom panel: dT/T as a function of SNR
+    - Top panel: distribution of SNR (or psf_max_value)
+    - Bottom panel: dT/T as a function of SNR (or psf_max_value)
+
+    Parameters
+    ----------
+    use_psf_max : bool
+        If True, use psf_max_value instead of SNR for the x-axis.
     """
+    # Set defaults based on x-axis type
+    if use_psf_max:
+        x_min = x_min if x_min is not None else 0
+        x_max = x_max if x_max is not None else 100000
+        bin_spacing = bin_spacing if bin_spacing is not None else 2000
+        x_col = 'psf_max_value'
+        x_label = 'psf pixel max value ($\\text{e}^{-}$)'
+        x_low, x_high = 0, 100000  # Reference lines for psf_max
+        file_suffix = f'psfmax_vs_dT_T_{bands}'
+    else:
+        x_min = x_min if x_min is not None else 10
+        x_max = x_max if x_max is not None else 1000
+        bin_spacing = bin_spacing if bin_spacing is not None else 20
+        x_col = 'snr'
+        x_label = 'SNR (base_GaussianFlux_instFlux / base_GaussianFlux_instFluxErr)'
+        x_low, x_high = 50, 1000  # Reference lines for SNR
+        file_suffix = f'SNR_vs_dT_T_{bands}'
 
     # Load the visit mapping
     with open(visitMappingFile, 'rb') as f:
@@ -131,11 +154,11 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
 
     print(f"Selected {len(selected_visits)} visits for bands: {bands}")
 
-    # Initialize meanify with SNR bounds for O(1) memory binning
-    meanify = meanify1D_wrms(bin_spacing=bin_spacing, x_min=snr_min, x_max=snr_max)
+    # Initialize meanify with x bounds for O(1) memory binning
+    meanify = meanify1D_wrms(bin_spacing=bin_spacing, x_min=x_min, x_max=x_max)
 
     # Load all data
-    all_snr = []
+    all_x = []
     all_dT_T = []
 
     for visit, info in tqdm(selected_visits, desc="Loading visits"):
@@ -143,16 +166,17 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
             data = load_visit_data(info['parquet_path'])
 
             # Filter valid data
-            valid = np.isfinite(data['snr']) & np.isfinite(data['dT_T'])
-            valid &= (data['snr'] > snr_min) & (data['snr'] < snr_max)
+            x_data = data[x_col]
+            valid = np.isfinite(x_data) & np.isfinite(data['dT_T'])
+            valid &= (x_data > x_min) & (x_data < x_max)
 
             if np.sum(valid) > 0:
-                snr = data['snr'][valid]
+                x_vals = x_data[valid]
                 dT_T = data['dT_T'][valid]
 
-                all_snr.append(snr)
+                all_x.append(x_vals)
                 all_dT_T.append(dT_T)
-                meanify.add_data(snr, dT_T)
+                meanify.add_data(x_vals, dT_T)
 
         except Exception as e:
             print(f"Failed to load visit {visit}: {e}")
@@ -161,35 +185,31 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
     meanify.meanify()
 
     # Concatenate all data for histogram
-    all_snr = np.concatenate(all_snr)
+    all_x = np.concatenate(all_x)
     all_dT_T = np.concatenate(all_dT_T)
 
-    print(f"Total stars: {len(all_snr)}")
+    print(f"Total stars: {len(all_x)}")
 
     # Create plot
     fig = plt.figure(figsize=(12, 10))
     plt.subplots_adjust(left=0.12, bottom=0.08, top=0.95, right=0.95, hspace=0)
     gs = gridspec.GridSpec(2, 1, height_ratios=[1, 2])
 
-    # SNR limits of interest
-    SNR_LOW = 50
-    SNR_HIGH = 1000
-
-    # Top panel: SNR distribution
+    # Top panel: x distribution
     ax1 = plt.subplot(gs[0])
-    ax1.hist(all_snr, bins=meanify.binning, color='b', alpha=0.7, edgecolor='black', linewidth=0.5)
+    ax1.hist(all_x, bins=meanify.binning, color='b', alpha=0.7, edgecolor='black', linewidth=0.5)
     ax1.set_yscale('log')
     ax1.set_ylabel('# stars', fontsize=14)
-    ax1.set_xlim(snr_min, snr_max)
+    ax1.set_xlim(x_min, x_max)
     ax1.tick_params(labelbottom=False)
-    ax1.set_title(f"DP2 | Band: {bands} | N_visits: {len(selected_visits)} | N_stars: {len(all_snr):,}", fontsize=14)
+    ax1.set_title(f"DP2 | Band: {bands} | N_visits: {len(selected_visits)} | N_stars: {len(all_x):,}", fontsize=14)
 
-    # Add SNR limit lines to top panel
-    ax1.axvline(SNR_LOW, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_LOW}')
-    ax1.axvline(SNR_HIGH, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_HIGH}')
+    # Add reference lines to top panel
+    ax1.axvline(x_low, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_low}')
+    ax1.axvline(x_high, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_high}')
     ax1.legend(loc='upper right', fontsize=10)
 
-    # Bottom panel: dT/T vs SNR
+    # Bottom panel: dT/T vs x
     ax2 = plt.subplot(gs[1])
 
     # Plot binned average
@@ -200,23 +220,23 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
                  fmt='none', c='b', capsize=3, zorder=2)
 
     # Reference lines
-    xlim = (snr_min, snr_max)
+    xlim = (x_min, x_max)
     ax2.axhline(0, color='k', linestyle='--', linewidth=1, zorder=1)
     ax2.fill_between(xlim, -0.004, 0.004, color='g', alpha=0.2, zorder=0, label='0.4% requirement')
     ax2.fill_between(xlim, -0.001, 0.001, color='g', alpha=0.3, zorder=0, label='0.1% goal')
 
-    # Add SNR limit lines to bottom panel
-    ax2.axvline(SNR_LOW, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_LOW}')
-    ax2.axvline(SNR_HIGH, color='r', linestyle='--', linewidth=2, label=f'SNR={SNR_HIGH}')
+    # Add reference lines to bottom panel
+    ax2.axvline(x_low, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_low}')
+    ax2.axvline(x_high, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_high}')
 
     ax2.set_xlim(xlim)
     ax2.set_ylim(-0.02, 0.02)
-    ax2.set_xlabel('SNR (base_GaussianFlux_instFlux / base_GaussianFlux_instFluxErr)', fontsize=14)
+    ax2.set_xlabel(x_label, fontsize=14)
     ax2.set_ylabel('$\\langle \\delta T / T \\rangle$', fontsize=14)
     ax2.legend(loc='upper right', fontsize=10)
 
     # Save plot
-    output_file = os.path.join(repOutPlot, f'SNR_vs_dT_T_{bands}.png')
+    output_file = os.path.join(repOutPlot, f'{file_suffix}.png')
     plt.savefig(output_file, dpi=150)
     plt.close()
     print(f"Saved: {output_file}")
@@ -225,13 +245,14 @@ def plot_snr_vs_dT(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
     results = {
         'bands': bands,
         'n_visits': len(selected_visits),
-        'n_stars': len(all_snr),
-        'snr_bins': meanify.x0,
+        'n_stars': len(all_x),
+        'x_type': x_col,
+        'x_bins': meanify.x0,
         'dT_T_mean': meanify.average,
         'dT_T_std': meanify.std,
         'dT_T_count': meanify.count,
     }
-    results_file = os.path.join(repOutPlot, f'SNR_vs_dT_T_{bands}.pkl')
+    results_file = os.path.join(repOutPlot, f'{file_suffix}.pkl')
     with open(results_file, 'wb') as f:
         pickle.dump(results, f)
     print(f"Saved results: {results_file}")
@@ -248,14 +269,16 @@ def main():
                         help="Path to visit_parquet_mapping.pkl file")
     parser.add_argument('--repOutPlot', type=str, default=defaultRepOutPlot,
                         help="Output directory for plots")
-    parser.add_argument('--snr_min', type=float, default=10,
-                        help="Minimum SNR (default: 10)")
-    parser.add_argument('--snr_max', type=float, default=1000,
-                        help="Maximum SNR (default: 1000)")
-    parser.add_argument('--bin_spacing', type=float, default=20,
-                        help="SNR bin spacing (default: 20)")
+    parser.add_argument('--x_min', type=float, default=None,
+                        help="Minimum x value (default: 10 for SNR, 0 for psf_max)")
+    parser.add_argument('--x_max', type=float, default=None,
+                        help="Maximum x value (default: 1000 for SNR, 100000 for psf_max)")
+    parser.add_argument('--bin_spacing', type=float, default=None,
+                        help="Bin spacing (default: 20 for SNR, 2000 for psf_max)")
     parser.add_argument('--n_visits', type=int, default=None,
                         help="Limit to N visits for testing (default: all)")
+    parser.add_argument('--use_psf_max', action='store_true',
+                        help="Use psf_max_value instead of SNR for x-axis")
 
     args = parser.parse_args()
 
@@ -263,10 +286,11 @@ def main():
         bands=args.bands,
         visitMappingFile=args.visitMappingFile,
         repOutPlot=args.repOutPlot,
-        snr_min=args.snr_min,
-        snr_max=args.snr_max,
+        x_min=args.x_min,
+        x_max=args.x_max,
         bin_spacing=args.bin_spacing,
         n_visits=args.n_visits,
+        use_psf_max=args.use_psf_max,
     )
 
 
