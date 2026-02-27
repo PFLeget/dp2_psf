@@ -19,10 +19,67 @@ import argparse
 from skyproj import McBrydeSkyproj
 from skyproj.survey import _Survey
 
+# For galactic coordinate transformation
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
 
 class SurveyMcBrydeSkyproj(_Survey, McBrydeSkyproj):
     """McBryde projection with survey footprint drawing capabilities."""
     pass
+
+
+# LMC and SMC centers (J2000)
+LMC_RA, LMC_DEC = 80.9, -69.8  # degrees
+SMC_RA, SMC_DEC = 13.2, -72.8  # degrees
+
+
+def filter_crowded_regions(ra_deg, dec_deg, galactic_b_min=20., lmc_radius=10., smc_radius=5.):
+    """
+    Filter out stars in crowded regions: Milky Way plane, LMC, SMC.
+
+    Parameters
+    ----------
+    ra_deg : array
+        Right ascension in degrees
+    dec_deg : array
+        Declination in degrees
+    galactic_b_min : float
+        Minimum absolute galactic latitude |b| to keep (degrees).
+        Stars with |b| < galactic_b_min are excluded.
+    lmc_radius : float
+        Radius around LMC to exclude (degrees)
+    smc_radius : float
+        Radius around SMC to exclude (degrees)
+
+    Returns
+    -------
+    mask : boolean array
+        True for stars to KEEP (outside crowded regions)
+    """
+    # Convert to astropy SkyCoord
+    coords = SkyCoord(ra=ra_deg * u.degree, dec=dec_deg * u.degree, frame='icrs')
+
+    # Get galactic latitude
+    galactic_b = coords.galactic.b.degree
+
+    # Filter Milky Way: keep stars with |b| > galactic_b_min
+    mask_mw = np.abs(galactic_b) > galactic_b_min
+
+    # Filter LMC: angular distance from LMC center
+    lmc_center = SkyCoord(ra=LMC_RA * u.degree, dec=LMC_DEC * u.degree, frame='icrs')
+    sep_lmc = coords.separation(lmc_center).degree
+    mask_lmc = sep_lmc > lmc_radius
+
+    # Filter SMC: angular distance from SMC center
+    smc_center = SkyCoord(ra=SMC_RA * u.degree, dec=SMC_DEC * u.degree, frame='icrs')
+    sep_smc = coords.separation(smc_center).degree
+    mask_smc = sep_smc > smc_radius
+
+    # Combine: keep only stars that pass ALL filters
+    mask = mask_mw & mask_lmc & mask_smc
+
+    return mask
 
 
 # Columns to read from parquet files
@@ -92,7 +149,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
                            repOutPlot='plots/',
                            key_second_moment='dT_T', bin_spacing=120, colorScale=0.005,
                            autoColorScale=False, autoColorScaleCst=2.,
-                           colorlabel=None, title=None, pklInput=None, psf_max_value=0):
+                           colorlabel=None, title=None, pklInput=None, psf_max_value=0,
+                           exclude_crowded=False, galactic_b_min=20., lmc_radius=10., smc_radius=5.):
     """
     Plot spatial variation of PSF second moments on the sky using HEALPix binning.
 
@@ -122,6 +180,14 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         Path to pre-computed pickle file (to redo plot only)
     psf_max_value : float
         Exclude PSFs with max pixel value below this threshold
+    exclude_crowded : bool
+        If True, exclude stars in MW plane, LMC, and SMC
+    galactic_b_min : float
+        Minimum |b| to keep when exclude_crowded=True (degrees)
+    lmc_radius : float
+        Radius around LMC to exclude (degrees)
+    smc_radius : float
+        Radius around SMC to exclude (degrees)
     """
 
     CMAP = plt.cm.inferno
@@ -146,13 +212,26 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
             # Load data directly from parquet
             data = load_visit_data(info['parquet_path'])
 
+            # Sky coordinates (RA, Dec) - convert from radians to degrees
+            ra_deg = np.degrees(data['ra'])
+            dec_deg = np.degrees(data['dec'])
+
             # Filter by psf_max_value if specified
             filtering = np.ones(len(data["ra"]), dtype=bool)
             if psf_max_value > 0:
                 filtering &= (data["psf_max_value"] > psf_max_value)
 
-            # Sky coordinates (RA, Dec) - convert from radians to degrees
-            coord = np.array([np.degrees(data['ra']), np.degrees(data['dec'])]).T
+            # Filter crowded regions (MW, LMC, SMC) if requested
+            if exclude_crowded:
+                mask_crowded = filter_crowded_regions(
+                    ra_deg, dec_deg,
+                    galactic_b_min=galactic_b_min,
+                    lmc_radius=lmc_radius,
+                    smc_radius=smc_radius
+                )
+                filtering &= mask_crowded
+
+            coord = np.array([ra_deg, dec_deg]).T
 
             meanifyHealpix.add_field(coord[filtering], data[key_second_moment][filtering])
 
@@ -239,7 +318,12 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
 
     plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08)
 
-    plt.savefig(os.path.join(repOutPlot, f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}.png'), dpi=150)
+    # Build output filename suffix
+    suffix = f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}'
+    if exclude_crowded:
+        suffix += '_noCrowded'
+
+    plt.savefig(os.path.join(repOutPlot, f'{suffix}.png'), dpi=150)
     plt.close()
 
     # Save results to pickle
@@ -254,8 +338,12 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
             'bands': bands,
             'key_second_moment': key_second_moment,
             'bin_spacing': bin_spacing,
+            'exclude_crowded': exclude_crowded,
+            'galactic_b_min': galactic_b_min if exclude_crowded else None,
+            'lmc_radius': lmc_radius if exclude_crowded else None,
+            'smc_radius': smc_radius if exclude_crowded else None,
         }
-        pklFile = open(os.path.join(repOutPlot, f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}.pkl'), 'wb')
+        pklFile = open(os.path.join(repOutPlot, f'{suffix}.pkl'), 'wb')
         pickle.dump(dicOutput, pklFile)
         pklFile.close()
 
@@ -276,6 +364,16 @@ def main():
 
     parser.add_argument('--autoColorScale', action='store_true')
 
+    # Crowded region filtering
+    parser.add_argument('--exclude_crowded', action='store_true',
+                        help='Exclude MW plane, LMC, and SMC')
+    parser.add_argument('--galactic_b_min', type=float, default=20.,
+                        help='Min |b| to keep when excluding MW (degrees, default: 20)')
+    parser.add_argument('--lmc_radius', type=float, default=10.,
+                        help='Radius around LMC to exclude (degrees, default: 10)')
+    parser.add_argument('--smc_radius', type=float, default=5.,
+                        help='Radius around SMC to exclude (degrees, default: 5)')
+
     args = parser.parse_args()
 
     plot_Sky_second_Moment(bands=args.bands, visitMappingFile=args.visitMappingFile,
@@ -283,7 +381,9 @@ def main():
                            key_second_moment=args.key_second_moment, bin_spacing=args.bin_spacing,
                            colorScale=args.colorScale, autoColorScale=args.autoColorScale,
                            autoColorScaleCst=args.autoColorScaleCst,
-                           colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value)
+                           colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value,
+                           exclude_crowded=args.exclude_crowded, galactic_b_min=args.galactic_b_min,
+                           lmc_radius=args.lmc_radius, smc_radius=args.smc_radius)
 
 
 if __name__ == "__main__":
