@@ -7,6 +7,8 @@
 
 # Configuration
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf"
+PLOT_OUT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/plots/zi_sweep_global_mean"
+REP_OUT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/plots/zi_sweep_global_mean"
 SCRIPT_NAME="FoVPlot_vs_heightMap.py"
 VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
@@ -62,7 +64,10 @@ python ${SCRIPT_NAME} \\
     --band ${band} \\
     --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --secondMomentKey ${moment} \\
-    --zernikeKey ${zernike}
+    --repOutPlot ${PLOT_OUT_DIR} \\
+    --repOutFile ${REP_OUT_DIR} \\
+    --zernikeKey ${zernike} \\
+    --subtract_focal_plane_mean
 
 echo "=================================================="
 echo "Job completed at: \$(date)"
