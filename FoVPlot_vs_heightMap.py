@@ -208,6 +208,9 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
         z_i_central = np.linspace(-0.25, 0.25, 41)
         half_bin_zise = 0.03
 
+    # to remove
+    z_i_central = np.array([z_i_central[10]])
+
     SLOPES = []
     HEIGHTMIN = []
     z_i_min = z_i_central - half_bin_zise
@@ -345,8 +348,13 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                 _ = plt.xticks(fontsize=18)
                 _ = plt.yticks(fontsize=18)
 
-                plt.ylim(1.5*MIN, 1.5*MAX)
-                plt.xlim(-7e-3, 7e-3)
+                if not subtract_focal_plane_mean:
+                    plt.ylim(1.5*MIN, 1.5*MAX)
+                    plt.xlim(-7e-3, 7e-3)
+                else:
+                    cstPlot = 3
+                    plt.ylim(cstPlot*1.5*MIN, cstPlot*1.5*MAX)
+                    plt.xlim(-7e-3*cstPlot, 7e-3*cstPlot)
 
                 ylim = plt.ylim()
                 xlim = plt.xlim()
