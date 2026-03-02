@@ -155,6 +155,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                         collectionButler="LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2",
                         repOutPlot='plots/',
                         repOutFile='data/',
+                        subtract_focal_plane_mean=False,
                         ):
 
     if secondMomentKey not in ['T', 'e1', 'e2', 'dT', 'de1', 'de2']:
@@ -252,30 +253,43 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                     dic = load_visit_data(visit_mapping[visit]['parquet_path'])
                     ccdIds = list(set(dic['detector']))
 
+                    # Compute field for entire focal plane first
+                    T_full = dic['ixx_src'] + dic['iyy_src']
+                    if secondMomentKey in ['T', 'dT']:
+                        field_full = T_full
+                    if secondMomentKey in ['e1', 'de1']:
+                        field_full = (dic['ixx_src'] - dic['iyy_src']) / T_full
+                    if secondMomentKey in ['e2', 'de2']:
+                        field_full = 2 * dic['ixy_src'] / T_full
+
+                    # Compute focal plane mean for this visit
+                    if secondMomentKey in ['dT', 'de1', 'de2']:
+                        if subtract_focal_plane_mean:
+                            visit_focal_plane_mean = np.mean(field_full)
+                        else:
+                            visit_focal_plane_mean = None
+
                     for ccd in ccdIds:
                         if ccd not in meanify:
                             meanify.update({ccd: treegp.meanify(bin_spacing=150, statistics="median")})
 
                         filtreDetector = dic['detector'] == ccd
                         coord = np.array([dic['xCCD'][filtreDetector], dic['yCCD'][filtreDetector]]).T
-                        T = dic['ixx_src'][filtreDetector] + dic['iyy_src'][filtreDetector]
-                        if secondMomentKey in ['T', 'dT']:
-                            field = T
-                        if secondMomentKey in ['e1', 'de1']:
-                            field = (dic['ixx_src'][filtreDetector] - dic['iyy_src'][filtreDetector]) / T
-                        if secondMomentKey in ['e2', 'de2']:
-                            field = 2 * dic['ixy_src'][filtreDetector] / T
+                        field = field_full[filtreDetector]
                         if secondMomentKey in ['dT', 'de1', 'de2']:
-                            field -= np.mean(field)
-                        if secondMomentKey in ['e1', 'de1']:
-                            T = dic['ixx_src'][filtreDetector] + dic['iyy_src'][filtreDetector]
-                            if secondMomentKey == 'dT':
-                                field = T - np.mean(T)
+                            if subtract_focal_plane_mean:
+                                field = field - visit_focal_plane_mean
+                            else:
+                                field = field - np.mean(field)
                         meanify[ccd].add_field(coord, field)
                     z_i_list.append(np.nanmedian(zernikeDic[visit]))
                     N_visit += 1
 
         if N_visit != 0:
+            # Compute focal plane mean height if needed
+            if subtract_focal_plane_mean:
+                meanHeightFocalPlane = np.mean(np.array(tableSLAC['z_meas']))
+
             for ccd in tqdm(meanify, desc=f"Building meanify | loop over ccds in {band}-band"):
 
                 meanify[ccd].meanify()
@@ -283,9 +297,12 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
                 plt.subplot(2, 2, 1)
 
                 FiltDet = np.array(tableSLAC['det']) == camera[ccd].getName()
-                meanHeightDet = np.mean(np.array(tableSLAC['z_meas'])[FiltDet])
                 coordSLAC = np.array([np.array(tableSLAC['fpx'])[FiltDet], np.array(tableSLAC['fpy'])[FiltDet]]).T
-                heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - meanHeightDet
+                if subtract_focal_plane_mean:
+                    heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - meanHeightFocalPlane
+                else:
+                    meanHeightDet = np.mean(np.array(tableSLAC['z_meas'])[FiltDet])
+                    heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - meanHeightDet
                 plt.scatter(coordSLAC[:, 0], coordSLAC[:, 1], s=12, marker='s',
                             c=heightSLAC, cmap=plt.cm.seismic, vmin=-0.005, vmax=0.005)
 
@@ -426,6 +443,8 @@ def main():
     parser.add_argument('--fitHeightMap', type=str, default=defaultFitHeightMap, help='Height map')
     parser.add_argument('--repOutPlot', type=str, default=defaultRepOutPlot, help='Rep out plot')
     parser.add_argument('--repOutFile', type=str, default=defaultRepOutFile, help='Rep out file')
+    parser.add_argument('--subtract_focal_plane_mean', action='store_true',
+                        help='Subtract focal plane mean per visit instead of per-CCD mean')
 
     args = parser.parse_args()
 
@@ -438,6 +457,7 @@ def main():
                         fitHeightMap=args.fitHeightMap,
                         repOutPlot=args.repOutPlot,
                         repOutFile=args.repOutFile,
+                        subtract_focal_plane_mean=args.subtract_focal_plane_mean,
                         )
 
 
