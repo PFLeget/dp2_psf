@@ -230,7 +230,7 @@ def getHeightMap_vs_FoV(band='g', zernikeKey="z4", repoButler="dp2_prep",
         MIN = -MAX
         MAX = MAX
         CMAP = plt.cm.seismic
-        colorlabel = "de1 - <de1> (pixel$^2$)"
+        colorlabel = "de2 - <de2> (pixel$^2$)"
 
     for i in range(len(z_i_min)):
 
