@@ -1,7 +1,0 @@
-pipetask run \
-     -b /repo/main \
-     -i u/tguillem/test_LED_weights/flat_g_sky_w0381,LSSTCam/defaults \
-     -o u/leget/LSSTCam/testFlat/newFlatv3 \
-     -p ${DRP_PIPE_DIR}/pipelines/LSSTCam/DRP.yaml#isr,calibrateImage \
-     -d "instrument='LSSTCam' and skymap='lsst_cells_v2' and exposure=2025111600173 and visit=2025111600173 and detector=87 " \
-     -j 12 \
