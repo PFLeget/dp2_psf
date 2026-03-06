@@ -1,10 +1,10 @@
 #!/bin/bash
 # A/B Test: New flat from tguillem
-# detector 87, g-band, |b| > 30, after Nov 2025
+# detector 87, g-band, |Galactic latitude| > 30 on DP2
 
 visitids=$(paste -sd, visitIds_flat_test.txt)
 
-bps submit /sdf/group/rubin/user/leget/batch/bps_generic.yaml \
+bps submit /sdf/group/rubin/user/leget/batch/bps_generic_main.yaml \
     -b /repo/main \
     -i u/tguillem/test_LED_weights/flat_g_sky_w0381,LSSTCam/defaults \
     -o u/leget/LSSTCam/testFlat/ABtest_newflat \

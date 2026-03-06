@@ -30,7 +30,7 @@ for visit, info in tqdm(g_visits.items(), desc="Filtering by Galactic latitude")
         dec = df['coord_dec'].median()
         coord = SkyCoord(ra=ra*u.rad, dec=dec*u.rad, frame='icrs')
         galactic = coord.galactic
-        if abs(galactic.b.deg) > 30:
+        if abs(galactic.b.deg) > 25:
             visits_filtered.append(visit)
     except Exception as e:
         print(f"Warning: could not read visit {visit}: {e}")
