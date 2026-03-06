@@ -24,16 +24,17 @@ print(f"Found {len(g_visits)} g-band visits after Nov 2025 in DP2")
 # Filter by |Galactic latitude| > 30 using parquet coordinates
 visits_filtered = []
 for visit, info in tqdm(g_visits.items(), desc="Filtering by Galactic latitude"):
-    try:
-        df = pl.scan_parquet(info['parquet_path']).select(['coord_ra', 'coord_dec']).collect()
-        ra = df['coord_ra'].median()
-        dec = df['coord_dec'].median()
-        coord = SkyCoord(ra=ra*u.rad, dec=dec*u.rad, frame='icrs')
-        galactic = coord.galactic
-        if abs(galactic.b.deg) > 25:
-            visits_filtered.append(visit)
-    except Exception as e:
-        print(f"Warning: could not read visit {visit}: {e}")
+    #try:
+    #    df = pl.scan_parquet(info['parquet_path']).select(['coord_ra', 'coord_dec']).collect()
+    #    ra = df['coord_ra'].median()
+    #    dec = df['coord_dec'].median()
+    #    coord = SkyCoord(ra=ra*u.rad, dec=dec*u.rad, frame='icrs')
+    #    galactic = coord.galactic
+    #    if abs(galactic.b.deg) > -1:
+    visits_filtered.append(visit)
+        
+    #except Exception as e:
+    #    print(f"Warning: could not read visit {visit}: {e}")
 
 print(f"Found {len(visits_filtered)} visits with |b| > 30")
 

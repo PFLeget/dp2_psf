@@ -125,7 +125,7 @@ def plot_detector_second_moment(butler, collection, detector, visit_file,
     plt.figure(figsize=(10, 10))
     x, y = np.meshgrid(meanify_obj._xedge, meanify_obj._yedge)
     plt.pcolormesh(x, y, meanify_obj._average, vmin=-colorScale, vmax=colorScale,
-                   cmap=plt.cm.seismic)
+                   cmap=plt.cm.inferno)
     cb = plt.colorbar()
     cb.set_label(key_second_moment, size=18)
     plt.xlabel('x (pixels)', size=18)
@@ -160,7 +160,7 @@ def plot_comparison(result_A, result_B, key_second_moment, repOutPlot, detector)
     # A (default)
     ax = axes[0]
     im = ax.pcolormesh(result_A['x'], result_A['y'], result_A['_average'],
-                       vmin=vmin, vmax=vmax, cmap=plt.cm.seismic)
+                       vmin=vmin, vmax=vmax, cmap=plt.cm.inferno)
     ax.set_title(f"Default flat (N={result_A['n_visits']})", size=14)
     ax.set_xlabel('x (pixels)')
     ax.set_ylabel('y (pixels)')
@@ -170,7 +170,7 @@ def plot_comparison(result_A, result_B, key_second_moment, repOutPlot, detector)
     # B (new flat)
     ax = axes[1]
     im = ax.pcolormesh(result_B['x'], result_B['y'], result_B['_average'],
-                       vmin=vmin, vmax=vmax, cmap=plt.cm.seismic)
+                       vmin=vmin, vmax=vmax, cmap=plt.cm.inferno)
     ax.set_title(f"New flat (N={result_B['n_visits']})", size=14)
     ax.set_xlabel('x (pixels)')
     ax.set_aspect('equal')
@@ -181,7 +181,7 @@ def plot_comparison(result_A, result_B, key_second_moment, repOutPlot, detector)
     diff = result_B['_average'] - result_A['_average']
     diff_scale = 0.002
     im = ax.pcolormesh(result_A['x'], result_A['y'], diff,
-                       vmin=-diff_scale, vmax=diff_scale, cmap=plt.cm.seismic)
+                       vmin=-diff_scale, vmax=diff_scale, cmap=plt.cm.inferno)
     ax.set_title(f"New - Default", size=14)
     ax.set_xlabel('x (pixels)')
     ax.set_aspect('equal')
