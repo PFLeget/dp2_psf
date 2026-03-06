@@ -64,7 +64,9 @@ def load_visit_data(parquet_path):
 def plot_detector_second_moment(butler, collection, detector, visit_file,
                                  key_second_moment='dT_T', bin_spacing=150,
                                  colorScale=0.005, repOutPlot='plots/',
-                                 label=None):
+                                 label=None, autoColorScale=False,
+                                 autoColorScaleCst=2., statisticsMedian=False,
+                                 vmin_override=None, vmax_override=None):
     """
     Plot spatial variation of PSF second moments on a single detector.
 
@@ -88,6 +90,12 @@ def plot_detector_second_moment(butler, collection, detector, visit_file,
         Output directory
     label : str
         Label for output files (e.g., 'default', 'newflat')
+    autoColorScale : bool
+        If True, compute color scale from data
+    autoColorScaleCst : float
+        Number of sigma for auto color scale
+    statisticsMedian : bool
+        If True, use median instead of mean
     """
     # Read visit IDs
     with open(visit_file, 'r') as f:
@@ -95,8 +103,12 @@ def plot_detector_second_moment(butler, collection, detector, visit_file,
 
     print(f"Processing {len(visits)} visits for detector {detector}, collection: {collection}")
 
-    meanify_obj = treegp.meanify(bin_spacing=bin_spacing, statistics="mean",
-                                  bounds=(0, 4100, 0, 4100))
+    statistics = "median" if statisticsMedian else "mean"
+    if statisticsMedian:
+        meanify_obj = treegp.meanify(bin_spacing=bin_spacing, statistics=statistics)
+    else:
+        meanify_obj = treegp.meanify(bin_spacing=bin_spacing, statistics=statistics,
+                                      bounds=(0, 4100, 0, 4100))
 
     n_processed = 0
     for visit in tqdm(visits, desc=f"Loading visits ({label})"):
@@ -119,12 +131,27 @@ def plot_detector_second_moment(butler, collection, detector, visit_file,
         print("No data found!")
         return None
 
-    meanify_obj.meanify()
+    if statisticsMedian:
+        meanify_obj.meanify(lu_min=0, lu_max=4100, lv_min=0, lv_max=4100)
+    else:
+        meanify_obj.meanify()
+
+    # Compute color scale
+    if vmin_override is not None and vmax_override is not None:
+        vmin, vmax = vmin_override, vmax_override
+    elif autoColorScale:
+        M = meanify_obj._average
+        MEAN = np.nanmedian(M)
+        STD = np.nanstd(M)
+        vmin = MEAN - autoColorScaleCst * STD
+        vmax = MEAN + autoColorScaleCst * STD
+    else:
+        vmin, vmax = -colorScale, colorScale
 
     # Plot in CCD coordinates
     plt.figure(figsize=(10, 10))
     x, y = np.meshgrid(meanify_obj._xedge, meanify_obj._yedge)
-    plt.pcolormesh(x, y, meanify_obj._average, vmin=-colorScale, vmax=colorScale,
+    plt.pcolormesh(x, y, meanify_obj._average, vmin=vmin, vmax=vmax,
                    cmap=plt.cm.inferno)
     cb = plt.colorbar()
     cb.set_label(key_second_moment, size=18)
@@ -144,6 +171,7 @@ def plot_detector_second_moment(butler, collection, detector, visit_file,
         'n_visits': n_processed,
         'detector': detector,
         'collection': collection,
+        'vmin': vmin, 'vmax': vmax,
     }
     with open(os.path.join(repOutPlot, f'{outname}.pkl'), 'wb') as f:
         pickle.dump(result, f)
@@ -155,7 +183,9 @@ def plot_comparison(result_A, result_B, key_second_moment, repOutPlot, detector)
     """Plot side-by-side comparison and difference."""
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
-    vmin, vmax = -0.005, 0.005
+    # Use color scale from results
+    vmin = min(result_A['vmin'], result_B['vmin'])
+    vmax = max(result_A['vmax'], result_B['vmax'])
 
     # A (default)
     ax = axes[0]
@@ -179,9 +209,9 @@ def plot_comparison(result_A, result_B, key_second_moment, repOutPlot, detector)
     # Difference (B - A)
     ax = axes[2]
     diff = result_B['_average'] - result_A['_average']
-    diff_scale = 0.002
+    diff_scale = (vmax - vmin) / 5  # scale difference to ~20% of main range
     im = ax.pcolormesh(result_A['x'], result_A['y'], diff,
-                       vmin=-diff_scale, vmax=diff_scale, cmap=plt.cm.inferno)
+                       vmin=-diff_scale, vmax=diff_scale, cmap=plt.cm.seismic)
     ax.set_title(f"New - Default", size=14)
     ax.set_xlabel('x (pixels)')
     ax.set_aspect('equal')
@@ -208,6 +238,9 @@ def main():
     parser.add_argument('--bin_spacing', type=float, default=150, help="Bin spacing in pixels")
     parser.add_argument('--colorScale', type=float, default=0.005, help="Color scale")
     parser.add_argument('--repOutPlot', type=str, default='plots/', help="Output directory")
+    parser.add_argument('--autoColorScale', action='store_true', help="Compute color scale from data")
+    parser.add_argument('--autoColorScaleCst', type=float, default=2., help="Number of sigma for auto color scale")
+    parser.add_argument('--statisticsMedian', action='store_true', help="Use median instead of mean")
 
     args = parser.parse_args()
 
@@ -216,16 +249,25 @@ def main():
     butler = Butler('/repo/main')
 
     # Process both collections
+    # First process A and get its color scale
     result_A = plot_detector_second_moment(
         butler, args.collection_A, args.detector, args.visit_file,
         key_second_moment=args.key_second_moment, bin_spacing=args.bin_spacing,
-        colorScale=args.colorScale, repOutPlot=args.repOutPlot, label='default'
+        colorScale=args.colorScale, repOutPlot=args.repOutPlot, label='default',
+        autoColorScale=args.autoColorScale, autoColorScaleCst=args.autoColorScaleCst,
+        statisticsMedian=args.statisticsMedian
     )
 
+    # Process B using the same color scale as A
+    vmin_A = result_A['vmin'] if result_A is not None else None
+    vmax_A = result_A['vmax'] if result_A is not None else None
     result_B = plot_detector_second_moment(
         butler, args.collection_B, args.detector, args.visit_file,
         key_second_moment=args.key_second_moment, bin_spacing=args.bin_spacing,
-        colorScale=args.colorScale, repOutPlot=args.repOutPlot, label='newflat'
+        colorScale=args.colorScale, repOutPlot=args.repOutPlot, label='newflat',
+        autoColorScale=args.autoColorScale, autoColorScaleCst=args.autoColorScaleCst,
+        statisticsMedian=args.statisticsMedian,
+        vmin_override=vmin_A, vmax_override=vmax_A
     )
 
     # Plot comparison if both succeeded
