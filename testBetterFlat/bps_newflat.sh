@@ -1,6 +1,6 @@
 #!/bin/bash
 # A/B Test: New flat from tguillem
-# detector 87, g-band, |Galactic latitude| > 30 on DP2
+# detector 87, g-band visits from DP2
 
 visitids=$(paste -sd, visitIds_flat_test.txt)
 
