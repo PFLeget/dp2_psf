@@ -1,10 +1,7 @@
 #!/usr/bin/env python
-"""Query visits for flat A/B testing: detector 87, g-band, |b| > 30, after Nov 2025, limit 5000."""
+"""Query g-band visits from DP2 for flat field A/B testing."""
 
 import pickle
-import polars as pl
-from astropy.coordinates import SkyCoord
-import astropy.units as u
 from tqdm import tqdm
 
 # Path to existing visit mapping from getData.py
@@ -15,35 +12,13 @@ print("Loading visit mapping...")
 with open(VISIT_MAPPING, 'rb') as f:
     visit_mapping = pickle.load(f)
 
-# Filter g-band visits after Nov 2025
-# Visit IDs encode date as YYYYMMDD in the first 8 digits
-g_visits = {v: info for v, info in visit_mapping.items()
-            if info['band'] == 'g'}
-print(f"Found {len(g_visits)} g-band visits after Nov 2025 in DP2")
-
-# Filter by |Galactic latitude| > 30 using parquet coordinates
-visits_filtered = []
-for visit, info in tqdm(g_visits.items(), desc="Filtering by Galactic latitude"):
-    #try:
-    #    df = pl.scan_parquet(info['parquet_path']).select(['coord_ra', 'coord_dec']).collect()
-    #    ra = df['coord_ra'].median()
-    #    dec = df['coord_dec'].median()
-    #    coord = SkyCoord(ra=ra*u.rad, dec=dec*u.rad, frame='icrs')
-    #    galactic = coord.galactic
-    #    if abs(galactic.b.deg) > -1:
-    visits_filtered.append(visit)
-        
-    #except Exception as e:
-    #    print(f"Warning: could not read visit {visit}: {e}")
-
-print(f"Found {len(visits_filtered)} visits with |b| > 30")
-
-
-print(f"Using {len(visits_filtered)} visits")
+# Filter g-band visits
+g_visits = [v for v, info in visit_mapping.items() if info['band'] == 'g']
+print(f"Found {len(g_visits)} g-band visits in DP2")
 
 # Save to file
 with open("visitIds_flat_test.txt", "w") as f:
-    for v in visits_filtered:
+    for v in g_visits:
         f.write(f"{v}\n")
 
-print(f"Saved visit IDs to visitIds_flat_test.txt")
+print(f"Saved {len(g_visits)} visit IDs to visitIds_flat_test.txt")
