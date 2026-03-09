@@ -16,6 +16,23 @@ The test runs ISR + calibrateImage on detector 87 for all g-band visits in DP2, 
 - DP2 visit mapping file at `/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl`
 - BPS configuration at `/sdf/group/rubin/user/leget/batch/bps_generic_main.yaml`
 
+### treegp installation
+
+The analysis script requires a specific branch of treegp with streaming meanify support:
+
+```bash
+git clone https://github.com/PFLeget/treegp.git
+cd treegp
+git checkout dev/pleget/meanifyStream
+pip install -e .
+```
+
+### BPS worker nodes
+
+BPS jobs require worker nodes to be allocated. Run `allocateNodes.py` in a screen or tmux session before submitting jobs.
+
+See `/sdf/home/l/leget/rubin-user/batch/service.sh` on S3DF for an example setup.
+
 ## Step 1: Generate visit list
 
 ```bash
