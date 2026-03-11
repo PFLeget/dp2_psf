@@ -3,7 +3,7 @@
 Plot single visit PSF second moment correlation with SLAC height map.
 Based on FoVPlot_vs_heightMap.py but for individual visits.
 
-Uses butler.getURI + polars for data access (same as testBetterFlat).
+Uses butler.get() with column selection for fast S3/embargo data access.
 """
 
 import numpy as np
@@ -20,13 +20,11 @@ from lsst.obs.lsst import LsstCam
 from astropy.io import fits
 from astropy.table import Table
 import os
-os.environ["POLARS_MAX_THREADS"] = "1"
-import polars as pl
 import argparse
 
 camera = LsstCam.getCamera()
 
-PARQUET_COLUMNS = [
+SELECTED_COLUMNS = [
     'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
     'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
     'slot_Centroid_x', 'slot_Centroid_y',
@@ -34,12 +32,16 @@ PARQUET_COLUMNS = [
 ]
 
 
-def load_visit_data(parquet_path):
-    """Load visit data from parquet file and compute derived columns."""
-    table = pl.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
+def load_visit_data_from_butler(butler, visit, detector, collection):
+    """Load visit data using butler.get() with column selection for S3/embargo data."""
+    # Fast access with column selection
+    ref = butler.query_datasets("single_visit_star_unstandardized",
+                                data_id={"visit": visit, "detector": detector},
+                                collections=collection)[0]
+    table = butler.get(ref, parameters={"columns": SELECTED_COLUMNS}, storageClass="DataFrame")
 
     # Filter to PSF candidates only
-    table = table.filter(pl.col('calib_psf_candidate'))
+    table = table[table['calib_psf_candidate']]
 
     slot_Shape_xx = table['slot_Shape_xx'].to_numpy()
     slot_Shape_yy = table['slot_Shape_yy'].to_numpy()
@@ -166,10 +168,7 @@ def plot_single_visit_heightmap(visit, butler, collection, fitHeightMap,
 
     for ccd in tqdm(ccdIds, desc="Loading"):
         try:
-            uri = butler.getURI("single_visit_star_unstandardized",
-                               instrument="LSSTCam", visit=visit, detector=ccd,
-                               collections=collection)
-            data = load_visit_data(uri.geturl())
+            data = load_visit_data_from_butler(butler, visit, ccd, collection)
             all_data[ccd] = data
 
             # Compute field values
