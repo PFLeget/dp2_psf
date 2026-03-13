@@ -21,13 +21,12 @@ from batoid_rubin import LSSTBuilder
 
 
 # AOS DOF structure (50 parameters total)
-# Indices 0-4:   M2 rigid body (dx, dy, dz, rx, ry) in meters/radians
-# Indices 5-9:   Camera rigid body (dx, dy, dz, rx, ry) in meters/radians
+# Indices 0-4:   M2 rigid body (dz, dx, dy, rx, ry)
+# Indices 5-9:   Camera rigid body (dz, dx, dy, rx, ry)
 # Indices 10-29: M1M3 bending modes (20 modes)
 # Indices 30-49: M2 bending modes (20 modes)
+# Units: microns for translations, arcsec for rotations
 
-# AOS DOF indices and units (all in microns for translations, arcsec for rotations)
-# Note: batoid_rubin applies sign flips internally, see builder.py line ~1285
 AOS_DOF_NAMES = {
     'm2_dz': 0, 'm2_dx': 1, 'm2_dy': 2, 'm2_rx': 3, 'm2_ry': 4,
     'cam_dz': 5, 'cam_dx': 6, 'cam_dy': 7, 'cam_rx': 8, 'cam_ry': 9,
@@ -39,31 +38,24 @@ for i in range(20):
 for i in range(20):
     AOS_DOF_NAMES[f'm2_bend_{i}'] = 30 + i
 
-# LSST detector ID to batoid_rubin detector ID mapping
-# These differ because of different numbering conventions
-# Mapping found by matching detector center positions (x_fp, y_fp)
-LSST_TO_BATOID_DET = {
-    1: 30, 2: 33, 3: 28, 4: 31, 5: 34, 6: 29, 7: 32, 8: 35,
-    9: 72, 10: 75, 11: 78, 12: 73, 13: 76, 14: 79, 15: 74, 16: 77, 17: 80,
-    18: 117, 19: 120, 21: 118, 22: 121, 23: 124, 24: 119, 25: 122, 26: 125,
-    28: 3, 29: 6, 30: 1, 31: 4, 32: 7, 33: 2, 34: 5, 35: 8,
-    36: 36, 37: 39, 38: 42, 39: 37, 40: 40, 41: 43, 42: 38, 43: 41, 44: 44,
-    45: 81, 46: 84, 47: 87, 48: 82, 49: 85, 50: 88, 51: 83, 52: 86, 53: 89,
-    54: 126, 55: 129, 56: 132, 57: 127, 58: 130, 59: 133, 60: 128, 61: 131, 62: 134,
-    63: 162, 64: 165, 66: 163, 67: 166, 68: 169, 69: 164, 70: 167, 71: 170,
-    72: 9, 73: 12, 74: 15, 75: 10, 76: 13, 77: 16, 78: 11, 79: 14, 80: 17,
-    81: 45, 82: 48, 83: 51, 84: 46, 85: 49, 86: 52, 87: 47, 88: 50, 89: 53,
-    90: 90, 91: 93, 92: 96, 93: 91, 94: 94, 95: 97, 96: 92, 97: 95, 98: 98,
-    99: 135, 100: 138, 101: 141, 102: 136, 103: 139, 104: 142, 105: 137, 106: 140, 107: 143,
-    108: 171, 109: 174, 110: 177, 111: 172, 112: 175, 113: 178, 114: 173, 115: 176, 116: 179,
-    117: 18, 118: 21, 119: 24, 120: 19, 121: 22, 124: 23, 125: 26,
-    126: 54, 127: 57, 128: 60, 129: 55, 130: 58, 131: 61, 132: 56, 133: 59, 134: 62,
-    135: 99, 136: 102, 137: 105, 138: 100, 139: 103, 140: 106, 141: 101, 142: 104, 143: 107,
-    144: 144, 145: 147, 146: 150, 147: 145, 148: 148, 149: 151, 150: 146, 151: 149, 152: 152,
-    153: 180, 154: 183, 155: 186, 156: 181, 157: 184, 158: 187, 159: 182, 160: 185,
-    162: 63, 163: 66, 164: 69, 165: 64, 166: 67, 167: 70, 169: 68, 170: 71,
-    171: 108, 172: 111, 173: 114, 174: 109, 175: 112, 176: 115, 177: 110, 178: 113, 179: 116,
-    180: 153, 181: 156, 182: 159, 183: 154, 184: 157, 185: 160, 186: 155, 187: 158,
+# Band to YAML file mapping
+BAND_YAML = {
+    'u': 'LSST_u.yaml',
+    'g': 'LSST_g.yaml',
+    'r': 'LSST_r.yaml',
+    'i': 'LSST_i.yaml',
+    'z': 'LSST_z.yaml',
+    'y': 'LSST_y.yaml',
+}
+
+# Band to wavelength mapping (nm)
+BAND_WAVELENGTH = {
+    'u': 367e-9,
+    'g': 482e-9,
+    'r': 622e-9,
+    'i': 754e-9,
+    'z': 869e-9,
+    'y': 971e-9,
 }
 
 
@@ -108,13 +100,20 @@ def get_default_fit_params() -> Dict[str, Dict[str, Any]]:
 @dataclass
 class FitConfig:
     """Configuration for optical parameter fitting."""
-    wavelength: float = 480e-9  # g-band ~480nm
+    band: str = 'g'  # Filter band (u, g, r, i, z, y)
     n_rays_rad: int = 15  # rays in radial direction
     n_rays_az: int = 30  # rays in azimuthal direction
     pixel_scale: float = 10e-6  # 10 micron pixels
     focal_length: float = 10.312  # meters
-    ccd_size_mm: float = 42.0  # CCD size in mm (for visualization)
     fit_params: Dict[str, Dict[str, Any]] = field(default_factory=get_default_fit_params)
+
+    @property
+    def wavelength(self):
+        return BAND_WAVELENGTH[self.band]
+
+    @property
+    def yaml_file(self):
+        return BAND_YAML[self.band]
 
 
 def load_and_bin_data(parquet_file: str, config: FitConfig):
@@ -277,9 +276,12 @@ def forward_model(fit_values: np.ndarray, fit_names: List[str], data: dict,
     Uses LSSTBuilder with with_aos_dof() and CCD height maps.
     Subtracts global focal plane mean from both data and predictions
     to focus on spatial patterns (atmosphere dominates absolute values).
+
+    NOTE: LSST focal plane coordinates have x/y swapped relative to batoid.
+    We swap them when computing field angles.
     """
     if fiducial_telescope is None:
-        fiducial_telescope = batoid.Optic.fromYaml("LSST_r.yaml")
+        fiducial_telescope = batoid.Optic.fromYaml(config.yaml_file)
 
     # Convert fit values to full DOF array
     dof = params_to_dof(fit_values, fit_names, config)
@@ -293,65 +295,40 @@ def forward_model(fit_values: np.ndarray, fit_names: List[str], data: dict,
     e1_pred = np.zeros(n_points)
     e2_pred = np.zeros(n_points)
 
-    # Cache built optics and field angles per detector
+    # Cache built optics per detector
     optic_cache = {}
-    field_angle_cache = {}
 
-    # Build optics and compute field angles from batoid detector centers
+    # Build optics for each detector (detector IDs match between data and batoid)
     unique_detectors = np.unique(data['detector'])
     for det_id in unique_detectors:
         det_id = int(det_id)
-        batoid_det_id = LSST_TO_BATOID_DET.get(det_id)
-        if batoid_det_id is None:
-            if verbose:
-                print(f"Warning: no batoid mapping for LSST detector {det_id}")
-            optic_cache[det_id] = None
-            field_angle_cache[det_id] = (0, 0)
-            continue
-
         try:
-            optic = builder.build_det(batoid_det_id)
+            optic = builder.build_det(det_id)
             optic_cache[det_id] = optic
-
-            # Get batoid detector center from the Bicubic surface
-            detector = optic.itemDict['LSST.LSSTCamera.Detector']
-            surf = detector.surface
-            x_center_m, y_center_m = 0, 0
-            if hasattr(surf, 'surfaces'):
-                for s in surf.surfaces:
-                    if hasattr(s, 'xs') and hasattr(s, 'ys'):  # Bicubic
-                        x_center_m = (s.xs[0] + s.xs[-1]) / 2
-                        y_center_m = (s.ys[0] + s.ys[-1]) / 2
-                        break
-
-            # Convert batoid detector center (meters) to field angle
-            # Note: batoid uses meters, no rotator angle needed (telescope frame)
-            thx = x_center_m / config.focal_length
-            thy = y_center_m / config.focal_length
-            field_angle_cache[det_id] = (thx, thy)
-
         except Exception as e:
             if verbose:
-                print(f"Warning: could not build optic for detector {det_id} (batoid {batoid_det_id}): {e}")
+                print(f"Warning: could not build optic for detector {det_id}: {e}")
             optic_cache[det_id] = None
-            field_angle_cache[det_id] = (0, 0)
 
     for i in range(n_points):
         det_id = int(data['detector'][i])
+        x_fp = data['x_fp'][i]  # LSST focal plane position in mm
+        y_fp = data['y_fp'][i]
 
-        optic = optic_cache[det_id]
+        optic = optic_cache.get(det_id)
         if optic is None:
             T_pred[i], e1_pred[i], e2_pred[i] = np.nan, np.nan, np.nan
             continue
 
-        # Use detector center field angle (not individual grid point)
-        thx, thy = field_angle_cache[det_id]
+        # Convert to field angle for batoid
+        # IMPORTANT: LSST and batoid have x/y swapped, so we use y_fp for thx and x_fp for thy
+        thx = (y_fp * 1e-3) / config.focal_length
+        thy = (x_fp * 1e-3) / config.focal_length
+
+        # Compute PSF moments
         T_pred[i], e1_pred[i], e2_pred[i] = compute_psf_moments_at_point(
             optic, thx, thy, config.wavelength, config
         )
-
-    # Rotate ellipticity back to focal plane frame
-    e1_pred, e2_pred = rotate_ellipticity(e1_pred, e2_pred, data['rotator_angle'])
 
     # Subtract global focal plane mean from predictions
     valid = np.isfinite(T_pred) & np.isfinite(e1_pred) & np.isfinite(e2_pred)
@@ -404,7 +381,7 @@ def fit_optics(data: dict, config: FitConfig, verbose=True):
     """
     Fit optical parameters to observed PSF moments using iminuit.
     """
-    fiducial = batoid.Optic.fromYaml("LSST_r.yaml")
+    fiducial = batoid.Optic.fromYaml(config.yaml_file)
 
     # Get parameters to fit
     fit_names = [name for name, p in config.fit_params.items() if p['fit']]
@@ -676,8 +653,8 @@ def main():
     parser.add_argument('--input', type=str,
                         default='data/visit_test_2025090600388_g_band.parquet',
                         help='Input parquet file')
-    parser.add_argument('--wavelength', type=float, default=480e-9,
-                        help='Wavelength in meters (default: 480nm for g-band)')
+    parser.add_argument('--band', type=str, default='g', choices=['u', 'g', 'r', 'i', 'z', 'y'],
+                        help='Filter band (default: g)')
     parser.add_argument('--output', type=str, default='fit_comparison.png',
                         help='Output plot file')
     parser.add_argument('--no-fit', action='store_true',
@@ -689,7 +666,8 @@ def main():
 
     args = parser.parse_args()
 
-    config = FitConfig(wavelength=args.wavelength)
+    config = FitConfig(band=args.band)
+    print(f"Using band {args.band}: wavelength={config.wavelength*1e9:.0f}nm, yaml={config.yaml_file}")
 
     # Set which parameters to fit based on command line
     for name in config.fit_params:
