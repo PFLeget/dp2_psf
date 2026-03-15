@@ -95,7 +95,6 @@ def plot_height_map_and_moments(
     bands=None,
     max_visits=None,
     repOutPlot='plots/',
-    subtract_focal_plane_mean=True,
 ):
     if secondMomentKey not in ['T', 'e1', 'e2', 'dT', 'de1', 'de2']:
         raise ValueError(f'Invalid secondMomentKey: {secondMomentKey}')
@@ -135,13 +134,14 @@ def plot_height_map_and_moments(
             dic = load_visit_data(parquet_path)
             ccdIds = list(set(dic['detector']))
 
-            field_full = get_field_for_key(dic, secondMomentKey)
-
-            # Subtract focal plane mean per visit (default), not per-CCD mean
-            if subtract_focal_plane_mean:
-                visit_mean = np.nanmean(field_full)
-            else:
-                visit_mean = 0.0
+            # Compute field for entire focal plane first
+            T_full = dic['T_src']
+            if secondMomentKey in ['T', 'dT']:
+                field_full = T_full
+            elif secondMomentKey in ['e1', 'de1']:
+                field_full = dic['e1_src']
+            elif secondMomentKey in ['e2', 'de2']:
+                field_full = dic['e2_src']
 
             for ccd in ccdIds:
                 if ccd not in meanify:
@@ -149,7 +149,11 @@ def plot_height_map_and_moments(
 
                 mask = dic['detector'] == ccd
                 coord = np.array([dic['xCCD'][mask], dic['yCCD'][mask]]).T
-                field = field_full[mask] - visit_mean
+                field = field_full[mask]
+
+                # Subtract per-CCD mean for dT, de1, de2
+                if secondMomentKey in ['dT', 'de1', 'de2']:
+                    field = field - np.mean(field)
 
                 meanify[ccd].add_field(coord, field)
 
@@ -171,7 +175,6 @@ def plot_height_map_and_moments(
 
     os.makedirs(repOutPlot, exist_ok=True)
     band_str = bands if bands else 'all'
-    meanHeightFocalPlane = np.mean(np.array(tableSLAC['z_meas']))
 
     # ============ Figure 1: Height map ============
     fig1, ax1 = plt.subplots(figsize=(12, 10))
@@ -180,7 +183,9 @@ def plot_height_map_and_moments(
         FiltDet = np.array(tableSLAC['det']) == camera[ccd].getName()
         coordSLAC = np.array([np.array(tableSLAC['fpx'])[FiltDet],
                               np.array(tableSLAC['fpy'])[FiltDet]]).T
-        heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - meanHeightFocalPlane
+        # Subtract per-detector mean height
+        heightDet = np.array(tableSLAC['z_meas'])[FiltDet]
+        heightSLAC = heightDet - np.mean(heightDet)
         ax1.scatter(coordSLAC[:, 0], coordSLAC[:, 1], s=8, marker='s',
                     c=heightSLAC, cmap=plt.cm.seismic, vmin=-0.005, vmax=0.005)
 
@@ -194,6 +199,10 @@ def plot_height_map_and_moments(
     cb = fig1.colorbar(sm, ax=ax1)
     cb.set_label("z - <z> (mm)", size=16)
     cb.ax.tick_params(labelsize=14)
+
+    # Capture xlim/ylim for second plot
+    xlim = ax1.get_xlim()
+    ylim = ax1.get_ylim()
 
     outfile1 = os.path.join(repOutPlot, f'heightMap_{band_str}_n{n_visits_processed}.png')
     fig1.savefig(outfile1, dpi=150, bbox_inches='tight')
@@ -222,6 +231,8 @@ def plot_height_map_and_moments(
         ax2.pcolormesh(x, y, meanify[ccd]._average, vmin=vmin, vmax=vmax, cmap=plt.cm.seismic)
 
     ax2.set_aspect('equal')
+    ax2.set_xlim(xlim)
+    ax2.set_ylim(ylim)
     ax2.set_xlabel('x (mm)', size=16)
     ax2.set_ylabel('y (mm)', size=16)
     ax2.tick_params(labelsize=14)
@@ -253,10 +264,6 @@ def main():
     parser.add_argument('--max_visits', type=int, default=None,
                         help="Maximum visits to process (for testing)")
     parser.add_argument('--repOutPlot', type=str, default=defaultRepOutPlot)
-    parser.add_argument('--subtract_focal_plane_mean', action='store_true', default=True,
-                        help="Subtract focal plane mean per visit (default: True)")
-    parser.add_argument('--no_subtract_mean', action='store_false', dest='subtract_focal_plane_mean',
-                        help="Do not subtract any mean")
 
     args = parser.parse_args()
 
@@ -267,7 +274,6 @@ def main():
         bands=args.bands,
         max_visits=args.max_visits,
         repOutPlot=args.repOutPlot,
-        subtract_focal_plane_mean=args.subtract_focal_plane_mean,
     )
 
 
