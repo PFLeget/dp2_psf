@@ -95,6 +95,7 @@ def plot_height_map_and_moments(
     bands=None,
     max_visits=None,
     repOutPlot='plots/',
+    subtract_focal_plane_mean=True,
 ):
     if secondMomentKey not in ['T', 'e1', 'e2', 'dT', 'de1', 'de2']:
         raise ValueError(f'Invalid secondMomentKey: {secondMomentKey}')
@@ -135,7 +136,12 @@ def plot_height_map_and_moments(
             ccdIds = list(set(dic['detector']))
 
             field_full = get_field_for_key(dic, secondMomentKey)
-            visit_mean = np.nanmean(field_full)
+
+            # Subtract focal plane mean per visit (default), not per-CCD mean
+            if subtract_focal_plane_mean:
+                visit_mean = np.nanmean(field_full)
+            else:
+                visit_mean = 0.0
 
             for ccd in ccdIds:
                 if ccd not in meanify:
@@ -247,6 +253,10 @@ def main():
     parser.add_argument('--max_visits', type=int, default=None,
                         help="Maximum visits to process (for testing)")
     parser.add_argument('--repOutPlot', type=str, default=defaultRepOutPlot)
+    parser.add_argument('--subtract_focal_plane_mean', action='store_true', default=True,
+                        help="Subtract focal plane mean per visit (default: True)")
+    parser.add_argument('--no_subtract_mean', action='store_false', dest='subtract_focal_plane_mean',
+                        help="Do not subtract any mean")
 
     args = parser.parse_args()
 
@@ -257,6 +267,7 @@ def main():
         bands=args.bands,
         max_visits=args.max_visits,
         repOutPlot=args.repOutPlot,
+        subtract_focal_plane_mean=args.subtract_focal_plane_mean,
     )
 
 
