@@ -36,7 +36,7 @@ def load_visit_data_from_butler(butler, visit, detector, collection):
     """Load visit data using butler.get() with column selection for S3/embargo data."""
     # Fast access with column selection
     ref = butler.query_datasets("single_visit_star_unstandardized",
-                                data_id={"visit": visit, "detector": detector},
+                                data_id={"instrument": 'LSSTCam', "visit": visit, "detector": detector},
                                 collections=collection)[0]
     table = butler.get(ref, parameters={"columns": SELECTED_COLUMNS}, storageClass="DataFrame")
 

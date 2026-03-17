@@ -145,7 +145,7 @@ def plot_height_map_and_moments(
 
             for ccd in ccdIds:
                 if ccd not in meanify:
-                    meanify[ccd] = treegp.meanify(bin_spacing=150, statistics="median")
+                    meanify[ccd] = treegp.meanify(bin_spacing=50, statistics="mean")
 
                 mask = dic['detector'] == ccd
                 coord = np.array([dic['xCCD'][mask], dic['yCCD'][mask]]).T
@@ -211,7 +211,7 @@ def plot_height_map_and_moments(
 
     # ============ Figure 2: Second moments ============
     if secondMomentKey in ['T', 'dT']:
-        vmax = 0.5
+        vmax = 0.25
         colorlabel = "T - <T> (pixel$^2$)"
     else:
         vmax = 0.05

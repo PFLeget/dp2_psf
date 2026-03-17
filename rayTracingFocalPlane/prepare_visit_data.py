@@ -59,6 +59,9 @@ def prepare_visit_data(visit, collection, output_file, repo='/repo/main'):
     """
     butler = Butler(repo, collections=collection)
 
+    rotator_angle =  butler.get("raw.visitInfo", exposure=visit, detector=42).getBoresightRotAngle()
+    rotator_angle_radian = rotator_angle.asRadians()
+
     # Get URI to the parquet file
     uri = butler.getURI("refit_psf_star", instrument="LSSTCam", visit=visit)
     print(f"Loading data from: {uri.geturl()}")
@@ -95,6 +98,7 @@ def prepare_visit_data(visit, collection, output_file, repo='/repo/main'):
 
     # Create output dataframe
     output = pl.DataFrame({
+        'rotator_angle_radian': [rotator_angle_radian] * len(x_fp),
         'visit': [visit] * len(x_fp),
         'detector': detector,
         'x_ccd': x_ccd,
