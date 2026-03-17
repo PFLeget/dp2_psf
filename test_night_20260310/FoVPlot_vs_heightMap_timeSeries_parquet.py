@@ -112,8 +112,12 @@ def process_single_visit(visit, parquet_dir, tableSLAC, secondMomentKey, bin_spa
         return None, None, None, None
 
     # Compute correlation
+    valid_ccds = []
     for ccd in meanify.keys():
-        meanify[ccd].meanify()
+        try:
+            meanify[ccd].meanify()
+        except (ValueError, IndexError):
+            continue
 
         FiltDet = np.array(tableSLAC['det']) == camera[ccd].getName()
         coordSLAC = np.array([np.array(tableSLAC['fpx'])[FiltDet],
@@ -124,6 +128,8 @@ def process_single_visit(visit, parquet_dir, tableSLAC, secondMomentKey, bin_spa
 
         try:
             CoordSubmit = meanify[ccd].coords0
+            if len(CoordSubmit) == 0:
+                continue
             csx, csy = pixel_to_focal(CoordSubmit[:, 0], CoordSubmit[:, 1], camera[ccd])
             CoordSubmit = np.array([csx, csy]).T
             PsfSubmit = meanify[ccd].params0
@@ -134,8 +140,12 @@ def process_single_visit(visit, parquet_dir, tableSLAC, secondMomentKey, bin_spa
 
             TTFoV.append(PsfSubmit)
             ZZFoV.append(predict)
+            valid_ccds.append(ccd)
         except:
             continue
+
+    # Only keep meanify entries for valid CCDs
+    meanify = {ccd: meanify[ccd] for ccd in valid_ccds}
 
     if len(TTFoV) == 0:
         return None, None, None, None
@@ -153,7 +163,7 @@ def process_single_visit(visit, parquet_dir, tableSLAC, secondMomentKey, bin_spa
 
 
 def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
-                 visit_ids_so_far, rho_values_so_far, secondMomentKey, frame_idx, frames_dir):
+                 visit_ids_so_far, rho_values_so_far, secondMomentKey, frame_idx, frames_dir, xlim_range):
     """Create a single frame for the video."""
 
     fig = plt.figure(figsize=(18, 16))
@@ -198,8 +208,7 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
     ax2.set_title(f'Correlation time series (N={len(visit_ids_so_far)})', size=16)
     ax2.tick_params(labelsize=14)
     ax2.set_ylim(-1, 1)
-    if len(visit_ids_so_far) > 1:
-        ax2.set_xlim(min(visit_ids_so_far) - 5, max(visit_ids_so_far) + 5)
+    ax2.set_xlim(xlim_range)
 
     # (2,2,3): Second moments field
     ax3 = plt.subplot(2, 2, 3)
@@ -267,6 +276,10 @@ def create_time_series_video(visitIds_file, parquet_dir, fitHeightMap,
     frames_dir = os.path.join(repOutPlot, 'frames_temp')
     os.makedirs(frames_dir, exist_ok=True)
 
+    # Pre-compute xlim for consistent axis across animation
+    all_visit_shorts = [v % 10000 for v in visits]
+    xlim_range = (min(all_visit_shorts) - 5, max(all_visit_shorts) + 5)
+
     # Track correlation over time
     visit_ids_so_far = []
     rho_values_so_far = []
@@ -293,7 +306,7 @@ def create_time_series_video(visitIds_file, parquet_dir, fitHeightMap,
         # Create frame
         create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
                      visit_ids_so_far, rho_values_so_far, secondMomentKey,
-                     frame_idx, frames_dir)
+                     frame_idx, frames_dir, xlim_range)
 
         frame_idx += 1
 

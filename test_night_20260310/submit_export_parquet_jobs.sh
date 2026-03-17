@@ -19,7 +19,7 @@ TOTAL_VISITS=$(wc -l < "${VISIT_FILE}")
 echo "Total visits: ${TOTAL_VISITS}"
 
 # Number of visits per job
-VISITS_PER_JOB=50
+VISITS_PER_JOB=2
 NUM_JOBS=$(( (TOTAL_VISITS + VISITS_PER_JOB - 1) / VISITS_PER_JOB ))
 
 echo "Submitting ${NUM_JOBS} jobs (${VISITS_PER_JOB} visits each)..."
