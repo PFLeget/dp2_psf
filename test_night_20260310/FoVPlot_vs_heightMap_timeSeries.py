@@ -104,29 +104,16 @@ def process_single_visit(visit, butler, collection, tableSLAC, secondMomentKey, 
     # Load all data
     meanify = {}
     all_data = {}
-    all_field_values = []
 
     for ccd in ccdIds:
         try:
             data = load_visit_data_from_butler(butler, visit, ccd, collection)
             all_data[ccd] = data
-
-            if secondMomentKey in ['T', 'dT']:
-                field = data['T_src']
-            elif secondMomentKey in ['e1', 'de1']:
-                field = data['e1_src']
-            elif secondMomentKey in ['e2', 'de2']:
-                field = data['e2_src']
-            all_field_values.extend(field)
         except:
             continue
 
     if len(all_data) == 0:
         return None, None, None, None
-
-    # Compute focal plane mean
-    focal_plane_mean = np.nanmean(all_field_values)
-    mean_height_fp = np.mean(np.array(tableSLAC['z_meas']))
 
     # Build meanify and collect correlation data
     TTFoV = []
@@ -143,7 +130,8 @@ def process_single_visit(visit, butler, collection, tableSLAC, secondMomentKey, 
         elif secondMomentKey in ['e2', 'de2']:
             field = data['e2_src']
 
-        field = field - focal_plane_mean
+        # Subtract per-CCD mean
+        field = field - np.mean(field)
         coord = np.array([data['xCCD'], data['yCCD']]).T
         meanify[ccd].add_field(coord, field)
 
@@ -154,7 +142,9 @@ def process_single_visit(visit, butler, collection, tableSLAC, secondMomentKey, 
         FiltDet = np.array(tableSLAC['det']) == camera[ccd].getName()
         coordSLAC = np.array([np.array(tableSLAC['fpx'])[FiltDet],
                               np.array(tableSLAC['fpy'])[FiltDet]]).T
-        heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - mean_height_fp
+        # Subtract per-detector mean height
+        heightDet = np.array(tableSLAC['z_meas'])[FiltDet]
+        heightSLAC = heightDet - np.mean(heightDet)
 
         try:
             CoordSubmit = meanify[ccd].coords0
@@ -190,8 +180,6 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
                  visit_ids_so_far, rho_values_so_far, secondMomentKey, frame_idx, frames_dir):
     """Create a single frame for the video."""
 
-    mean_height_fp = np.mean(np.array(tableSLAC['z_meas']))
-
     fig = plt.figure(figsize=(18, 16))
     plt.subplots_adjust(top=0.93, wspace=0.3, hspace=0.25, right=0.98, left=0.08, bottom=0.06)
 
@@ -209,7 +197,9 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
         FiltDet = np.array(tableSLAC['det']) == camera[ccd].getName()
         coordSLAC = np.array([np.array(tableSLAC['fpx'])[FiltDet],
                               np.array(tableSLAC['fpy'])[FiltDet]]).T
-        heightSLAC = np.array(tableSLAC['z_meas'])[FiltDet] - mean_height_fp
+        # Subtract per-detector mean height
+        heightDet = np.array(tableSLAC['z_meas'])[FiltDet]
+        heightSLAC = heightDet - np.mean(heightDet)
         ax1.scatter(coordSLAC[:, 0], coordSLAC[:, 1], s=12, marker='s',
                     c=heightSLAC, cmap=plt.cm.seismic, vmin=-0.005, vmax=0.005)
 
