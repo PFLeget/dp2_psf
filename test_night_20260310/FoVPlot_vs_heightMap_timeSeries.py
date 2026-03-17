@@ -123,11 +123,11 @@ def process_single_visit(visit, butler, collection, tableSLAC, secondMomentKey, 
         data = all_data[ccd]
         meanify[ccd] = treegp.meanify(bin_spacing=bin_spacing, statistics="median")
 
-        if secondMomentKey in ['T', 'dT']:
+        if secondMomentKey in ['dT']:
             field = data['T_src']
-        elif secondMomentKey in ['e1', 'de1']:
+        elif secondMomentKey in ['de1']:
             field = data['e1_src']
-        elif secondMomentKey in ['e2', 'de2']:
+        elif secondMomentKey in ['de2']:
             field = data['e2_src']
 
         # Subtract per-CCD mean
@@ -184,7 +184,7 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
     plt.subplots_adjust(top=0.93, wspace=0.3, hspace=0.25, right=0.98, left=0.08, bottom=0.06)
 
     # Color scale settings
-    if secondMomentKey in ['T', 'dT']:
+    if secondMomentKey in ['dT']:
         MAX = 0.5
         colorlabel = "T - <T> (pixel$^2$)"
     else:
@@ -361,7 +361,7 @@ def create_time_series_video(visitIds_file, butler, collection, fitHeightMap,
 
 def main():
     defaultFitHeightMap = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/LSST_FP_cold_b_measurement_4col_bysurface.fits"
-    defaultCollection = "u/leget/LSSTCam/HeightMapCorrelation20260311"
+    defaultCollection = "u/leget/LSSTCam/HeightMapCorrelation20260310"
     defaultRepOutPlot = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/test_night_20260310/plots/"
     defaultVisitIdsFile = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/test_night_20260310/visitIds.txt"
 
@@ -372,8 +372,8 @@ def main():
                         help="Butler collection")
     parser.add_argument('--fitHeightMap', type=str, default=defaultFitHeightMap,
                         help="Path to SLAC height map FITS file")
-    parser.add_argument('--secondMomentKey', type=str, default='T',
-                        help="Second moment key: T, e1, e2, dT, de1, de2")
+    parser.add_argument('--secondMomentKey', type=str, default='dT',
+                        help="Second moment key: dT, de1, de2")
     parser.add_argument('--bin_spacing', type=float, default=150,
                         help="Bin spacing in pixels")
     parser.add_argument('--repOutPlot', type=str, default=defaultRepOutPlot,
