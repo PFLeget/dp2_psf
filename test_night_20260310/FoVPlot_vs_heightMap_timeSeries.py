@@ -185,7 +185,7 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
 
     # Color scale settings
     if secondMomentKey in ['dT']:
-        MAX = 0.5
+        MAX = 0.2
         colorlabel = "T - <T> (pixel$^2$)"
     else:
         MAX = 0.05
