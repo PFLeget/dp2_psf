@@ -2,442 +2,248 @@
 """
 Fit optical parameters from PSF second moments using batoid ray tracing.
 
-Uses LSSTBuilder with CCD height maps and AOS degrees of freedom.
+Based on fit_batoid.py approach:
+- Fits AOS DOFs + atmospheric seeing moments (smxx, smyy, smxy)
+- Uses WCS to convert focal plane (mm) to tangent plane angles (degrees)
+- Residuals: seeing_moment + batoid_moment - observed_moment
 """
 
 import numpy as np
+import pandas as pd
 import polars as pl
-from matplotlib.patches import Polygon
-from matplotlib.collections import PatchCollection
-import os
-import matplotlib.pyplot as plt
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+import pickle
 import argparse
+import os
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
 
-# batoid imports
 import batoid
 from batoid_rubin import LSSTBuilder
+from scipy.optimize import leastsq
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
+from matplotlib.collections import PatchCollection
 
 
-# AOS DOF structure (50 parameters total)
-# Indices 0-4:   M2 rigid body (dz, dx, dy, rx, ry)
-# Indices 5-9:   Camera rigid body (dz, dx, dy, rx, ry)
-# Indices 10-29: M1M3 bending modes (20 modes)
-# Indices 30-49: M2 bending modes (20 modes)
-# Units: microns for translations, arcsec for rotations
+# Central wavelengths (nm)
+CENTRAL_WAVELENGTH = {'u': 360, 'g': 480, 'r': 625, 'i': 760, 'z': 875, 'y': 970}
 
-AOS_DOF_NAMES = {
+# AOS DOF indices
+AOS_DOF_INDICES = {
     'm2_dz': 0, 'm2_dx': 1, 'm2_dy': 2, 'm2_rx': 3, 'm2_ry': 4,
     'cam_dz': 5, 'cam_dx': 6, 'cam_dy': 7, 'cam_rx': 8, 'cam_ry': 9,
-}
-# Add M1M3 bending modes
-for i in range(20):
-    AOS_DOF_NAMES[f'm1m3_bend_{i}'] = 10 + i
-# Add M2 bending modes
-for i in range(20):
-    AOS_DOF_NAMES[f'm2_bend_{i}'] = 30 + i
+} | {f'm1m3_bend_{i}': 10 + i for i in range(20)} | {f'm2_bend_{i}': 30 + i for i in range(20)}
 
-# Band to YAML file mapping
-BAND_YAML = {
-    'u': 'LSST_u.yaml',
-    'g': 'LSST_g.yaml',
-    'r': 'LSST_r.yaml',
-    'i': 'LSST_i.yaml',
-    'z': 'LSST_z.yaml',
-    'y': 'LSST_y.yaml',
-}
-
-# Band to wavelength mapping (nm)
-BAND_WAVELENGTH = {
-    'u': 367e-9,
-    'g': 482e-9,
-    'r': 622e-9,
-    'i': 754e-9,
-    'z': 869e-9,
-    'y': 971e-9,
-}
+MICRONS_TO_PIXELS = 0.1
+METERS_TO_MM = 1e3
 
 
-def get_default_fit_params() -> Dict[str, Dict[str, Any]]:
+def get_telescope(band):
+    """Load telescope model for given band."""
+    return batoid.Optic.fromYaml(f'Rubin_v3.14_{band}.yaml')
+
+
+def launch_rays(telescope, band, ax, ay):
     """
-    Get default fit parameters configuration.
-
-    Returns dict where each key is a DOF name and value is:
-        - 'fit': bool, whether to fit this parameter
-        - 'init': float, initial value
-        - 'bounds': tuple, (min, max) bounds
-        - 'value': float, fixed value if fit=False
+    Launch rays for spots at angles (degrees) ax, ay in tangent plane.
+    Returns DataFrame with moments in pixels^2.
     """
-    params = {}
+    wavelength = CENTRAL_WAVELENGTH[band]
 
-    # M2 rigid body - units: microns for translations, arcsec for rotations
-    # NOTE: m2_dz is FIXED (degenerate with cam_dz for focus)
-    params['m2_dz'] = {'fit': False, 'init': 0, 'bounds': (-100, 100), 'value': 0}  # FIXED
-    params['m2_dx'] = {'fit': False, 'init': 0, 'bounds': (-100, 100), 'value': 0}
-    params['m2_dy'] = {'fit': False, 'init': 0, 'bounds': (-100, 100), 'value': 0}
-    params['m2_rx'] = {'fit': False, 'init': 0, 'bounds': (-50, 50), 'value': 0}  # arcsec
-    params['m2_ry'] = {'fit': False, 'init': 0, 'bounds': (-50, 50), 'value': 0}
+    def compute_rays(alpha, beta):
+        rays = batoid.RayVector.asPolar(
+            optic=telescope,
+            inner=telescope.pupilSize / 2 * telescope.pupilObscuration,
+            theta_x=np.deg2rad(alpha),
+            theta_y=np.deg2rad(beta),
+            nrad=24, naz=96,
+            wavelength=wavelength * 1e-9
+        )
+        telescope.trace(rays)
+        return rays
 
-    # Camera rigid body - units: microns for translations, arcsec for rotations
-    params['cam_dz'] = {'fit': True, 'init': 0, 'bounds': (-100, 100), 'value': 0}
-    params['cam_dx'] = {'fit': False, 'init': 0, 'bounds': (-100, 100), 'value': 0}
-    params['cam_dy'] = {'fit': False, 'init': 0, 'bounds': (-100, 100), 'value': 0}
-    params['cam_rx'] = {'fit': False, 'init': 0, 'bounds': (-50, 50), 'value': 0}
-    params['cam_ry'] = {'fit': False, 'init': 0, 'bounds': (-50, 50), 'value': 0}
+    spots = pd.DataFrame(columns=['theta_x', 'theta_y', 'x0', 'y0', 'mxx', 'myy', 'mxy'])
 
-    # M1M3 bending modes - typically small
-    for i in range(20):
-        params[f'm1m3_bend_{i}'] = {'fit': False, 'init': 0, 'bounds': (-1, 1), 'value': 0}
-
-    # M2 bending modes
-    for i in range(20):
-        params[f'm2_bend_{i}'] = {'fit': False, 'init': 0, 'bounds': (-1, 1), 'value': 0}
-
-    return params
-
-
-@dataclass
-class FitConfig:
-    """Configuration for optical parameter fitting."""
-    band: str = 'g'  # Filter band (u, g, r, i, z, y)
-    n_rays_rad: int = 15  # rays in radial direction
-    n_rays_az: int = 30  # rays in azimuthal direction
-    pixel_scale: float = 10e-6  # 10 micron pixels
-    focal_length: float = 10.312  # meters
-    fit_params: Dict[str, Dict[str, Any]] = field(default_factory=get_default_fit_params)
-
-    @property
-    def wavelength(self):
-        return BAND_WAVELENGTH[self.band]
-
-    @property
-    def yaml_file(self):
-        return BAND_YAML[self.band]
-
-
-def load_and_bin_data(parquet_file: str, config: FitConfig):
-    """Load observed data and compute one mean value per detector.
-
-    Parameters
-    ----------
-    parquet_file : str
-        Input parquet file path
-    config : FitConfig
-        Configuration object
-
-    Returns
-    -------
-    dict with one mean value per CCD for T, e1, e2 and raw data for visualization
-    """
-    df = pl.read_parquet(parquet_file)
-
-    x_fp = df['x_fp'].to_numpy()
-    y_fp = df['y_fp'].to_numpy()
-    T = df['T'].to_numpy()
-    e1 = df['e1'].to_numpy()
-    e2 = df['e2'].to_numpy()
-    detector = df['detector'].to_numpy()
-    rotator_angle = df['rotator_angle_radian'][0]
-
-    unique_detectors = np.unique(detector)
-
-    grid_x, grid_y, grid_T, grid_e1, grid_e2, grid_det = [], [], [], [], [], []
-
-    for det_id in unique_detectors:
-        mask = detector == det_id
-        if np.sum(mask) < 5:  # Need at least 5 stars
+    for alpha, beta in zip(ax, ay):
+        rays = compute_rays(alpha, beta)
+        w0 = ~rays.vignetted
+        if np.sum(w0) < 10:
+            spots.loc[len(spots)] = [alpha, beta, np.nan, np.nan, np.nan, np.nan, np.nan]
             continue
 
-        # Compute mean position and mean moments for this detector
-        grid_x.append(np.mean(x_fp[mask]))
-        grid_y.append(np.mean(y_fp[mask]))
-        grid_T.append(np.mean(T[mask]))
-        grid_e1.append(np.mean(e1[mask]))
-        grid_e2.append(np.mean(e2[mask]))
-        grid_det.append(det_id)
+        # Position in microns
+        x0 = rays[w0].x.mean() * 1e6
+        y0 = rays[w0].y.mean() * 1e6
+        # Moments in microns^2, then convert to pixels^2
+        mxx = rays[w0].x.var() * 1e12 * MICRONS_TO_PIXELS**2
+        myy = rays[w0].y.var() * 1e12 * MICRONS_TO_PIXELS**2
+        mxy = ((rays[w0].x * 1e6 - x0) * (rays[w0].y * 1e6 - y0)).mean() * MICRONS_TO_PIXELS**2
 
-    return {
-        'x_fp': np.array(grid_x),
-        'y_fp': np.array(grid_y),
-        'T': np.array(grid_T),
-        'e1': np.array(grid_e1),
-        'e2': np.array(grid_e2),
-        'detector': np.array(grid_det),
-        'rotator_angle': rotator_angle,
-        'raw_x': x_fp,
-        'raw_y': y_fp,
-        'raw_T': T,
-        'raw_e1': e1,
-        'raw_e2': e2,
-    }
+        spots.loc[len(spots)] = [alpha, beta, x0, y0, mxx, myy, mxy]
+
+    return spots
 
 
-def focal_plane_to_field_angle(x_fp, y_fp, rotator_angle, focal_length=10.312):
-    """Convert focal plane coordinates (mm) to field angles (radians)."""
-    x_m = x_fp * 1e-3
-    y_m = y_fp * 1e-3
-    th_fp_x = x_m / focal_length
-    th_fp_y = y_m / focal_length
+class WCS:
+    """Mapping from focal plane (mm) to angles in tangent plane (degrees)."""
 
-    cos_r = np.cos(-rotator_angle)
-    sin_r = np.sin(-rotator_angle)
-    thx = cos_r * th_fp_x - sin_r * th_fp_y
-    thy = sin_r * th_fp_x + cos_r * th_fp_y
+    def __init__(self, telescope, band):
+        wavelength = CENTRAL_WAVELENGTH[band]
 
-    return thx, thy
+        def compute_rays(alpha, beta):
+            rays = batoid.RayVector.asPolar(
+                optic=telescope,
+                inner=telescope.pupilSize / 2 * telescope.pupilObscuration,
+                theta_x=np.deg2rad(alpha),
+                theta_y=np.deg2rad(beta),
+                nrad=2, naz=8,
+                wavelength=wavelength * 1e-9
+            )
+            telescope.trace(rays)
+            w0 = ~rays.vignetted
+            x0 = rays[w0].x.mean() * METERS_TO_MM
+            y0 = rays[w0].y.mean() * METERS_TO_MM
+            return x0, y0
 
+        # Build polynomial mapping
+        theta_x = np.linspace(-0.9, 0.9, 5)
+        theta_y = theta_x
+        aa, bb = np.meshgrid(theta_x, theta_y)
+        aa, bb = aa.flatten(), bb.flatten()
 
-def compute_psf_moments_at_point(optic, thx, thy, wavelength, config: FitConfig):
-    """Compute PSF second moments at a single field point using ray tracing."""
-    rays = batoid.RayVector.asPolar(
-        optic,
-        wavelength=wavelength,
-        theta_x=thx,
-        theta_y=thy,
-        nrad=config.n_rays_rad,
-        naz=config.n_rays_az,
-    )
+        X, Y = [], []
+        for a, b in zip(aa, bb):
+            x0, y0 = compute_rays(a, b)
+            X.append(x0)
+            Y.append(y0)
 
-    optic.trace(rays)
+        X = np.array(X).squeeze()
+        Y = np.array(Y).squeeze()
+        A = np.array([X * 0 + 1, X, Y, X**2, Y**2, X * Y]).T
+        B = np.array([aa, bb]).T
+        coeff, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+        self.coeff = coeff
 
-    good = ~rays.vignetted
-    if np.sum(good) < 10:
-        return np.nan, np.nan, np.nan
-
-    x = rays.x[good] - np.mean(rays.x[good])
-    y = rays.y[good] - np.mean(rays.y[good])
-
-    ixx = np.mean(x**2)
-    iyy = np.mean(y**2)
-    ixy = np.mean(x * y)
-
-    ixx_pix = ixx / config.pixel_scale**2
-    iyy_pix = iyy / config.pixel_scale**2
-    ixy_pix = ixy / config.pixel_scale**2
-
-    T = ixx_pix + iyy_pix
-    e1 = (ixx_pix - iyy_pix) / T
-    e2 = 2 * ixy_pix / T
-
-    return T, e1, e2
+    def __call__(self, xfp, yfp):
+        """Convert xfp, yfp (mm) to tangent plane angles (degrees)."""
+        A = np.array([xfp * 0 + 1, xfp, yfp, xfp**2, yfp**2, xfp * yfp])
+        return self.coeff.T.dot(A)
 
 
-def rotate_ellipticity(e1, e2, angle):
-    """Rotate ellipticity by an angle (spin-2 transformation)."""
-    cos2a = np.cos(2 * angle)
-    sin2a = np.sin(2 * angle)
-    e1_rot = e1 * cos2a + e2 * sin2a
-    e2_rot = -e1 * sin2a + e2 * cos2a
-    return e1_rot, e2_rot
+class BatoidFitter:
+    """Fitter for AOS DOFs using batoid ray tracing."""
 
+    def __init__(self, ref_telescope, param_names):
+        for param in param_names:
+            if param not in AOS_DOF_INDICES:
+                raise ValueError(f"{param} is not in AOS param list: {list(AOS_DOF_INDICES.keys())}")
 
-def params_to_dof(fit_values: np.ndarray, fit_names: List[str],
-                  config: FitConfig) -> np.ndarray:
-    """
-    Convert fit parameter values to full 50-element AOS DOF array.
+        self.builder = LSSTBuilder(ref_telescope)
+        self.param_names = param_names
+        self.n_extra_params = 3  # Atmospheric seeing: smxx, smyy, smxy
+        self.to_fit = None
+        self.band_for_fit = None
 
-    Parameters
-    ----------
-    fit_values : array
-        Values for parameters being fit
-    fit_names : list
-        Names of parameters being fit
-    config : FitConfig
-        Configuration with fixed parameter values
+    def move_parts(self, what, shifts):
+        """Build telescope with given AOS DOF shifts."""
+        aos_shifts = np.zeros(50)
+        for param, how_much in zip(what, shifts):
+            aos_shifts[AOS_DOF_INDICES[param]] = how_much
+        return self.builder.with_aos_dof(aos_shifts).build()
 
-    Returns
-    -------
-    dof : array (50,)
-        Full AOS DOF array
-    """
-    dof = np.zeros(50)
+    def eval_tg_plane_angles(self, data, band):
+        """Add tangent plane angles to data."""
+        self.to_fit = data.copy()
+        self.band_for_fit = band
+        wcs = WCS(self.builder.fiducial, band)
+        a, b = wcs(self.to_fit.xfp.to_numpy(), self.to_fit.yfp.to_numpy())
+        self.to_fit['ax'] = a
+        self.to_fit['ay'] = b
 
-    # Set fixed values
-    for name, param in config.fit_params.items():
-        if not param['fit']:
-            idx = AOS_DOF_NAMES[name]
-            dof[idx] = param['value']
+    def residuals(self, parameters):
+        """Compute residuals: seeing + batoid - observed."""
+        offset_tel = self.move_parts(self.param_names, parameters[:-self.n_extra_params])
+        smxx, smyy, smxy = parameters[-3:]
 
-    # Set fit values
-    for val, name in zip(fit_values, fit_names):
-        idx = AOS_DOF_NAMES[name]
-        dof[idx] = val
+        ax = self.to_fit.ax.to_numpy()
+        ay = self.to_fit.ay.to_numpy()
+        spots = launch_rays(offset_tel, self.band_for_fit, ax, ay)
 
-    return dof
+        momres = np.array([
+            smxx + spots.mxx - self.to_fit.mxx,
+            smyy + spots.myy - self.to_fit.myy,
+            smxy + spots.mxy - self.to_fit.mxy
+        ])
+        return momres
 
+    def chi2_func(self, parameters):
+        """Chi2 function for optimizer."""
+        out = self.residuals(parameters)
+        chi2 = (out**2).sum()
+        print(f'chi2={chi2:.2f}, params={parameters}')
+        return out.flatten()
 
-def forward_model(fit_values: np.ndarray, fit_names: List[str], data: dict,
-                  config: FitConfig, fiducial_telescope=None,
-                  return_full=False, verbose=False):
-    """
-    Compute predicted PSF moments given optical parameters.
+    def fit(self, data, band, seeing=None, start=None, verbose=True):
+        """
+        Fit AOS DOFs to data.
 
-    Uses LSSTBuilder with with_aos_dof() and CCD height maps.
-    Subtracts global focal plane mean from both data and predictions
-    to focus on spatial patterns (atmosphere dominates absolute values).
+        Parameters
+        ----------
+        data : DataFrame
+            Must contain columns: xfp, yfp, mxx, myy, mxy
+        band : str
+            Filter band
+        seeing : tuple, optional
+            Initial guess for (smxx, smyy, smxy)
+        start : dict, optional
+            Initial values for parameters
 
-    NOTE: LSST focal plane coordinates have x/y swapped relative to batoid.
-    We swap them when computing field angles.
-    """
-    if fiducial_telescope is None:
-        fiducial_telescope = batoid.Optic.fromYaml(config.yaml_file)
+        Returns
+        -------
+        params : array
+            Fitted parameters
+        cov : array
+            Covariance matrix
+        """
+        self.eval_tg_plane_angles(data, band)
 
-    # Convert fit values to full DOF array
-    dof = params_to_dof(fit_values, fit_names, config)
+        # Starting point
+        starting_point = np.zeros(len(self.param_names) + self.n_extra_params)
+        if seeing is not None:
+            starting_point[-3:] = np.array(seeing)
 
-    # Create builder with AOS DOF
-    builder = LSSTBuilder(fiducial_telescope)
-    builder = builder.with_aos_dof(dof)
+        if start is not None:
+            for name, val in start.items():
+                if name in self.param_names:
+                    i = self.param_names.index(name)
+                    starting_point[i] = val
+                elif name in ['smxx', 'smyy', 'smxy']:
+                    i = ['smxx', 'smyy', 'smxy'].index(name)
+                    starting_point[len(self.param_names) + i] = val
 
-    n_points = len(data['x_fp'])
-    T_pred = np.zeros(n_points)
-    e1_pred = np.zeros(n_points)
-    e2_pred = np.zeros(n_points)
+        # Fit
+        if verbose:
+            print(f"Fitting {len(self.param_names)} DOFs: {self.param_names}")
+            print(f"Starting point: {starting_point}")
 
-    # Cache built optics per detector
-    optic_cache = {}
-
-    # Build optics for each detector (detector IDs match between data and batoid)
-    unique_detectors = np.unique(data['detector'])
-    for det_id in unique_detectors:
-        det_id = int(det_id)
-        try:
-            optic = builder.build_det(det_id)
-            optic_cache[det_id] = optic
-        except Exception as e:
-            if verbose:
-                print(f"Warning: could not build optic for detector {det_id}: {e}")
-            optic_cache[det_id] = None
-
-    for i in range(n_points):
-        det_id = int(data['detector'][i])
-        x_fp = data['x_fp'][i]  # LSST focal plane position in mm
-        y_fp = data['y_fp'][i]
-
-        optic = optic_cache.get(det_id)
-        if optic is None:
-            T_pred[i], e1_pred[i], e2_pred[i] = np.nan, np.nan, np.nan
-            continue
-
-        # Convert to field angle for batoid
-        # IMPORTANT: LSST and batoid have x/y swapped, so we use y_fp for thx and x_fp for thy
-        thx = (y_fp * 1e-3) / config.focal_length
-        thy = (x_fp * 1e-3) / config.focal_length
-
-        # Compute PSF moments
-        T_pred[i], e1_pred[i], e2_pred[i] = compute_psf_moments_at_point(
-            optic, thx, thy, config.wavelength, config
+        fitted_params, cov_params, _, mesg, ierr = leastsq(
+            self.chi2_func, starting_point, full_output=True
         )
 
-    # Subtract global focal plane mean from predictions
-    valid = np.isfinite(T_pred) & np.isfinite(e1_pred) & np.isfinite(e2_pred)
-    if np.sum(valid) == 0:
-        if return_full:
-            return {'T': T_pred, 'e1': e1_pred, 'e2': e2_pred,
-                    'dT': T_pred, 'de1': e1_pred, 'de2': e2_pred}
-        return 1e10
+        if ierr not in [1, 2, 3, 4]:
+            print(f'Warning: leastsq ierr={ierr}, message: {mesg}')
 
-    T_pred_mean = np.nanmean(T_pred[valid])
-    e1_pred_mean = np.nanmean(e1_pred[valid])
-    e2_pred_mean = np.nanmean(e2_pred[valid])
-
-    dT_pred = T_pred - T_pred_mean
-    de1_pred = e1_pred - e1_pred_mean
-    de2_pred = e2_pred - e2_pred_mean
-
-    # Subtract global focal plane mean from observations
-    T_obs = data['T']
-    e1_obs = data['e1']
-    e2_obs = data['e2']
-
-    T_obs_mean = np.nanmean(T_obs)
-    e1_obs_mean = np.nanmean(e1_obs)
-    e2_obs_mean = np.nanmean(e2_obs)
-
-    dT_obs = T_obs - T_obs_mean
-    de1_obs = e1_obs - e1_obs_mean
-    de2_obs = e2_obs - e2_obs_mean
-
-    if return_full:
-        return {
-            'T': T_pred, 'e1': e1_pred, 'e2': e2_pred,
-            'dT': dT_pred, 'de1': de1_pred, 'de2': de2_pred,
-            'T_mean': T_pred_mean, 'e1_mean': e1_pred_mean, 'e2_mean': e2_pred_mean,
-        }
-
-    # Compute chi2 on residuals (mean-subtracted)
-    sigma_dT = 0.3  # pixel^2 for spatial variations
-    sigma_de = 0.02  # ellipticity
-
-    chi2_dT = np.sum(((dT_pred[valid] - dT_obs[valid]) / sigma_dT)**2)
-    chi2_de1 = np.sum(((de1_pred[valid] - de1_obs[valid]) / sigma_de)**2)
-    chi2_de2 = np.sum(((de2_pred[valid] - de2_obs[valid]) / sigma_de)**2)
-
-    return chi2_dT + chi2_de1 + chi2_de2
+        return fitted_params, cov_params
 
 
-def fit_optics(data: dict, config: FitConfig, verbose=True):
-    """
-    Fit optical parameters to observed PSF moments using iminuit.
-    """
-    fiducial = batoid.Optic.fromYaml(config.yaml_file)
-
-    # Get parameters to fit
-    fit_names = [name for name, p in config.fit_params.items() if p['fit']]
-    n_fit = len(fit_names)
-
-    if n_fit == 0:
-        print("No parameters to fit!")
-        return np.array([]), None
-
-    print(f"Fitting {n_fit} parameters: {fit_names}")
-
-    # Get initial values and bounds
-    initial = [config.fit_params[name]['init'] for name in fit_names]
-    bounds = [config.fit_params[name]['bounds'] for name in fit_names]
-
-    try:
-        from iminuit import Minuit
-
-        def objective(*vals):
-            chi2 = forward_model(np.array(vals), fit_names, data, config, fiducial)
-            if verbose:
-                param_str = ', '.join([f'{n}={v:.2e}' for n, v in zip(fit_names, vals)])
-                print(f"  chi2={chi2:.2f} | {param_str}")
-            return chi2
-
-        m = Minuit(objective, *initial, name=fit_names)
-        for i, (lo, hi) in enumerate(bounds):
-            m.limits[i] = (lo, hi)
-
-        m.errordef = Minuit.LEAST_SQUARES
-
-        if verbose:
-            print("\nStarting Minuit optimization...")
-
-        m.migrad()
-
-        return np.array(m.values), m
-
-    except ImportError:
-        print("iminuit not installed. Using scipy.optimize instead.")
-        from scipy.optimize import minimize
-
-        def objective(vals):
-            chi2 = forward_model(vals, fit_names, data, config, fiducial)
-            if verbose:
-                print(f"  chi2={chi2:.2f}")
-            return chi2
-
-        result = minimize(objective, initial, method='L-BFGS-B', bounds=bounds)
-        return result.x, None
-
-
-def load_ccd_geometry(geometry_file: str = None):
-    """Load CCD geometry (corners) from CSV file."""
+def load_ccd_geometry(geometry_file=None):
+    """Load CCD geometry from CSV file."""
     if geometry_file is None:
         geometry_file = os.path.join(os.path.dirname(__file__), 'data', 'ccd_geometry.csv')
+
+    if not os.path.exists(geometry_file):
+        return None
 
     df = pl.read_csv(geometry_file)
     geometry = {}
@@ -458,7 +264,7 @@ def load_ccd_geometry(geometry_file: str = None):
 
 
 def plot_ccd_polygons(ax, detectors, values, geometry, cmap, vmin, vmax):
-    """Plot CCDs as polygons with colors based on values."""
+    """Plot CCDs as polygons colored by values."""
     patches = []
     colors = []
 
@@ -479,227 +285,262 @@ def plot_ccd_polygons(ax, detectors, values, geometry, cmap, vmin, vmax):
     return collection
 
 
-def plot_comparison(data, pred, output_file='fit_comparison.png', geometry=None):
-    """Plot observed vs predicted PSF moments (mean-subtracted) using CCD polygons."""
+def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png', geometry=None):
+    """
+    Plot observed vs fitted moments.
+
+    Parameters
+    ----------
+    data : DataFrame
+        Must contain: det, xfp, yfp, mxx, myy, mxy, fmxx, fmyy, fmxy
+    fit_params : dict
+        Fitted parameters including smxx, smyy, smxy
+    dof_names : list
+        Names of fitted DOFs
+    """
     if geometry is None:
         geometry = load_ccd_geometry()
 
-    fig, axes = plt.subplots(4, 3, figsize=(15, 18))
+    fig, axes = plt.subplots(3, 4, figsize=(18, 14))
 
-    # Mean-subtract the observed data for plotting
-    raw_dT = data['raw_T'] - np.nanmean(data['raw_T'])
-    raw_de1 = data['raw_e1'] - np.nanmean(data['raw_e1'])
-    raw_de2 = data['raw_e2'] - np.nanmean(data['raw_e2'])
+    # Extract data
+    detectors = data['det'].to_numpy() if hasattr(data['det'], 'to_numpy') else data['det'].values
+    xfp = data['xfp'].to_numpy() if hasattr(data['xfp'], 'to_numpy') else data['xfp'].values
+    yfp = data['yfp'].to_numpy() if hasattr(data['yfp'], 'to_numpy') else data['yfp'].values
 
-    # Mean per CCD observed (used in chi2)
-    obs_dT = data['T'] - np.nanmean(data['T'])
-    obs_de1 = data['e1'] - np.nanmean(data['e1'])
-    obs_de2 = data['e2'] - np.nanmean(data['e2'])
+    # Observed moments (mean-subtracted for spatial pattern)
+    obs_mxx = data['mxx'].to_numpy() if hasattr(data['mxx'], 'to_numpy') else data['mxx'].values
+    obs_myy = data['myy'].to_numpy() if hasattr(data['myy'], 'to_numpy') else data['myy'].values
+    obs_mxy = data['mxy'].to_numpy() if hasattr(data['mxy'], 'to_numpy') else data['mxy'].values
+
+    # Fitted moments
+    fit_mxx = data['fmxx'].to_numpy() if hasattr(data['fmxx'], 'to_numpy') else data['fmxx'].values
+    fit_myy = data['fmyy'].to_numpy() if hasattr(data['fmyy'], 'to_numpy') else data['fmyy'].values
+    fit_mxy = data['fmxy'].to_numpy() if hasattr(data['fmxy'], 'to_numpy') else data['fmxy'].values
 
     # Residuals
-    res_dT = pred['dT'] - obs_dT
-    res_de1 = pred['de1'] - obs_de1
-    res_de2 = pred['de2'] - obs_de2
+    res_mxx = obs_mxx - fit_mxx
+    res_myy = obs_myy - fit_myy
+    res_mxy = obs_mxy - fit_mxy
 
-    vmin_dT, vmax_dT = -1.5, 1.5
-    vmin_de, vmax_de = -0.10, 0.10
-    detectors = data['detector']
+    # Compute T, e1, e2
+    obs_T = obs_mxx + obs_myy
+    obs_e1 = (obs_mxx - obs_myy) / obs_T
+    obs_e2 = 2 * obs_mxy / obs_T
 
-    # Row 1: Raw observed (mean-subtracted) - scatter points
-    ax = axes[0, 0]
-    sc = ax.scatter(data['raw_x'], data['raw_y'], c=raw_dT, s=1,
-                    cmap='seismic', vmin=vmin_dT, vmax=vmax_dT)
-    plt.colorbar(sc, ax=ax, label='dT (pixel²)')
-    ax.set_title('Raw Observed dT = T - <T>')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_ylabel('y_fp (mm)')
+    fit_T = fit_mxx + fit_myy
+    fit_e1 = (fit_mxx - fit_myy) / fit_T
+    fit_e2 = 2 * fit_mxy / fit_T
+
+    # Mean-subtract for spatial patterns
+    obs_dT = obs_T - np.nanmean(obs_T)
+    obs_de1 = obs_e1 - np.nanmean(obs_e1)
+    obs_de2 = obs_e2 - np.nanmean(obs_e2)
+
+    fit_dT = fit_T - np.nanmean(fit_T)
+    fit_de1 = fit_e1 - np.nanmean(fit_e1)
+    fit_de2 = fit_e2 - np.nanmean(fit_e2)
+
+    res_dT = obs_dT - fit_dT
+    res_de1 = obs_de1 - fit_de1
+    res_de2 = obs_de2 - fit_de2
+
+    # Color scales
+    vmin_dT, vmax_dT = -0.5, 0.5
+    vmin_de, vmax_de = -0.15, 0.15
+    lim = 350
+
+    # Plot settings
+    plot_data = [
+        # Row 0: Observed
+        (0, 0, obs_dT, 'Observed dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+        (0, 1, obs_de1, 'Observed de1', vmin_de, vmax_de, 'de1'),
+        (0, 2, obs_de2, 'Observed de2', vmin_de, vmax_de, 'de2'),
+        # Row 1: Fitted (batoid)
+        (1, 0, fit_dT, 'Fitted dT (batoid)', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+        (1, 1, fit_de1, 'Fitted de1 (batoid)', vmin_de, vmax_de, 'de1'),
+        (1, 2, fit_de2, 'Fitted de2 (batoid)', vmin_de, vmax_de, 'de2'),
+        # Row 2: Residuals
+        (2, 0, res_dT, 'Residual dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+        (2, 1, res_de1, 'Residual de1', vmin_de, vmax_de, 'de1'),
+        (2, 2, res_de2, 'Residual de2', vmin_de, vmax_de, 'de2'),
+    ]
+
+    for row, col, values, title, vmin, vmax, label in plot_data:
+        ax = axes[row, col]
+        if geometry is not None:
+            coll = plot_ccd_polygons(ax, detectors, values, geometry, 'seismic', vmin, vmax)
+            if coll:
+                plt.colorbar(coll, ax=ax, label=label)
+        else:
+            sc = ax.scatter(xfp, yfp, c=values, s=40, cmap='seismic', vmin=vmin, vmax=vmax)
+            plt.colorbar(sc, ax=ax, label=label)
+
+        ax.set_title(title)
+        ax.set_xlabel('x_fp (mm)')
+        ax.set_ylabel('y_fp (mm)')
+        ax.set_aspect('equal')
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+
+    # Column 4: Scatter plots and stats
+    # Scatter: observed vs fitted
+    ax = axes[0, 3]
+    ax.scatter(obs_dT, fit_dT, s=20, alpha=0.7)
+    ax.plot([-0.5, 0.5], [-0.5, 0.5], 'k--', alpha=0.5)
+    ax.set_xlabel('Observed dT')
+    ax.set_ylabel('Fitted dT')
+    rho_T = np.corrcoef(obs_dT, fit_dT)[0, 1]
+    ax.set_title(f'dT: corr={rho_T:.3f}')
     ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
 
-    ax = axes[0, 1]
-    sc = ax.scatter(data['raw_x'], data['raw_y'], c=raw_de1, s=1,
-                    cmap='seismic', vmin=vmin_de, vmax=vmax_de)
-    plt.colorbar(sc, ax=ax, label='de1')
-    ax.set_title('Raw Observed de1 = e1 - <e1>')
-    ax.set_xlabel('x_fp (mm)')
+    ax = axes[1, 3]
+    ax.scatter(obs_de1, fit_de1, s=20, alpha=0.7, label='de1')
+    ax.scatter(obs_de2, fit_de2, s=20, alpha=0.7, label='de2')
+    ax.plot([-0.15, 0.15], [-0.15, 0.15], 'k--', alpha=0.5)
+    ax.set_xlabel('Observed')
+    ax.set_ylabel('Fitted')
+    rho_e1 = np.corrcoef(obs_de1, fit_de1)[0, 1]
+    rho_e2 = np.corrcoef(obs_de2, fit_de2)[0, 1]
+    ax.set_title(f'de1: corr={rho_e1:.3f}, de2: corr={rho_e2:.3f}')
+    ax.legend()
     ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
 
-    ax = axes[0, 2]
-    sc = ax.scatter(data['raw_x'], data['raw_y'], c=raw_de2, s=1,
-                    cmap='seismic', vmin=vmin_de, vmax=vmax_de)
-    plt.colorbar(sc, ax=ax, label='de2')
-    ax.set_title('Raw Observed de2 = e2 - <e2>')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
+    # Stats text
+    ax = axes[2, 3]
+    ax.axis('off')
 
-    # Row 2: Mean per CCD observed - CCD polygons
-    ax = axes[1, 0]
-    col = plot_ccd_polygons(ax, detectors, obs_dT, geometry,
-                            'seismic', vmin_dT, vmax_dT)
-    if col:
-        plt.colorbar(col, ax=ax, label='dT (pixel²)')
-    ax.set_title('Observed <dT> per CCD')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_ylabel('y_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
+    stats_text = "Fitted parameters:\n"
+    stats_text += "-" * 30 + "\n"
+    for name in dof_names:
+        if name in fit_params:
+            stats_text += f"{name}: {fit_params[name]:.4f}\n"
+    stats_text += "-" * 30 + "\n"
+    stats_text += f"smxx: {fit_params.get('smxx', 0):.4f}\n"
+    stats_text += f"smyy: {fit_params.get('smyy', 0):.4f}\n"
+    stats_text += f"smxy: {fit_params.get('smxy', 0):.4f}\n"
+    stats_text += "-" * 30 + "\n"
+    stats_text += f"Correlations:\n"
+    stats_text += f"  dT:  {rho_T:.3f}\n"
+    stats_text += f"  de1: {rho_e1:.3f}\n"
+    stats_text += f"  de2: {rho_e2:.3f}\n"
+    stats_text += "-" * 30 + "\n"
+    stats_text += f"RMS residuals:\n"
+    stats_text += f"  dT:  {np.std(res_dT):.4f}\n"
+    stats_text += f"  de1: {np.std(res_de1):.4f}\n"
+    stats_text += f"  de2: {np.std(res_de2):.4f}\n"
 
-    ax = axes[1, 1]
-    col = plot_ccd_polygons(ax, detectors, obs_de1, geometry,
-                            'seismic', vmin_de, vmax_de)
-    if col:
-        plt.colorbar(col, ax=ax, label='de1')
-    ax.set_title('Observed <de1> per CCD')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
+    ax.text(0.1, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', fontfamily='monospace')
 
-    ax = axes[1, 2]
-    col = plot_ccd_polygons(ax, detectors, obs_de2, geometry,
-                            'seismic', vmin_de, vmax_de)
-    if col:
-        plt.colorbar(col, ax=ax, label='de2')
-    ax.set_title('Observed <de2> per CCD')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
-    # Row 3: Predicted - CCD polygons
-    ax = axes[2, 0]
-    col = plot_ccd_polygons(ax, detectors, pred['dT'], geometry,
-                            'seismic', vmin_dT, vmax_dT)
-    if col:
-        plt.colorbar(col, ax=ax, label='dT (pixel²)')
-    ax.set_title('Predicted dT')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_ylabel('y_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
-    ax = axes[2, 1]
-    col = plot_ccd_polygons(ax, detectors, pred['de1'], geometry,
-                            'seismic', vmin_de, vmax_de)
-    if col:
-        plt.colorbar(col, ax=ax, label='de1')
-    ax.set_title('Predicted de1')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
-    ax = axes[2, 2]
-    col = plot_ccd_polygons(ax, detectors, pred['de2'], geometry,
-                            'seismic', vmin_de, vmax_de)
-    if col:
-        plt.colorbar(col, ax=ax, label='de2')
-    ax.set_title('Predicted de2')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
-    # Row 4: Residuals - CCD polygons
-    ax = axes[3, 0]
-    col = plot_ccd_polygons(ax, detectors, res_dT, geometry,
-                            'seismic', vmin_dT, vmax_dT)
-    if col:
-        plt.colorbar(col, ax=ax, label='dT (pixel²)')
-    ax.set_title('Residual dT (pred - obs)')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_ylabel('y_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
-    ax = axes[3, 1]
-    col = plot_ccd_polygons(ax, detectors, res_de1, geometry,
-                            'seismic', vmin_de, vmax_de)
-    if col:
-        plt.colorbar(col, ax=ax, label='de1')
-    ax.set_title('Residual de1 (pred - obs)')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
-    ax = axes[3, 2]
-    col = plot_ccd_polygons(ax, detectors, res_de2, geometry,
-                            'seismic', vmin_de, vmax_de)
-    if col:
-        plt.colorbar(col, ax=ax, label='de2')
-    ax.set_title('Residual de2 (pred - obs)')
-    ax.set_xlabel('x_fp (mm)')
-    ax.set_aspect('equal')
-    ax.set_xlim(-350, 350)
-    ax.set_ylim(-350, 350)
-
+    plt.suptitle('Batoid Optical Fit Results', fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(output_file, dpi=150)
     plt.close(fig)
-    print(f'Saved comparison plot to {output_file}')
+    print(f'Saved {output_file}')
 
 
 def main():
     parser = argparse.ArgumentParser(description="Fit optical parameters from PSF moments")
-    parser.add_argument('--input', type=str,
-                        default='data/visit_test_2025090600388_g_band.parquet',
-                        help='Input parquet file')
-    parser.add_argument('--band', type=str, default='g', choices=['u', 'g', 'r', 'i', 'z', 'y'],
-                        help='Filter band (default: g)')
-    parser.add_argument('--output', type=str, default='fit_comparison.png',
+    parser.add_argument('--input', type=str, default='iq_dat.parquet',
+                        help='Input parquet file with mxx, myy, mxy, xfp, yfp columns')
+    parser.add_argument('--band', type=str, default='r',
+                        help='Filter band (default: r)')
+    parser.add_argument('--output', type=str, default='fit_results.png',
                         help='Output plot file')
+    parser.add_argument('--tag', type=str, default='',
+                        help='Tag for output files')
+    parser.add_argument('--params', type=str, nargs='+',
+                        default=['m2_dz', 'm2_rx', 'm2_ry', 'cam_dz', 'cam_rx', 'cam_ry'],
+                        help='DOF parameters to fit')
+    parser.add_argument('--start', type=str, default=None,
+                        help='Pickle file with starting values')
+    parser.add_argument('--rcut', type=float, default=300,
+                        help='Radial cut for vignetted data (mm)')
     parser.add_argument('--no-fit', action='store_true',
-                        help='Skip fitting, just compute forward model')
-    parser.add_argument('--verbose', action='store_true',
-                        help='Print optimization progress')
-    parser.add_argument('--fit-params', type=str, nargs='+', default=['cam_dz'],
-                        help='Parameters to fit (default: cam_dz). Note: m2_dz is fixed (degenerate with cam_dz)')
+                        help='Skip fitting, just plot existing results')
+    parser.add_argument('--fit-file', type=str, default=None,
+                        help='Use existing fit parquet file for plotting')
 
     args = parser.parse_args()
 
-    config = FitConfig(band=args.band)
-    print(f"Using band {args.band}: wavelength={config.wavelength*1e9:.0f}nm, yaml={config.yaml_file}")
+    # If just plotting existing results
+    if args.fit_file is not None:
+        print(f"Loading existing fit from {args.fit_file}")
+        data = pd.read_parquet(args.fit_file)
 
-    # Set which parameters to fit based on command line
-    for name in config.fit_params:
-        config.fit_params[name]['fit'] = name in args.fit_params
+        # Try to load fit params
+        params_file = f'fit_params{args.tag}.pkl'
+        if os.path.exists(params_file):
+            with open(params_file, 'rb') as f:
+                fit_params = pickle.load(f)
+        else:
+            fit_params = {}
 
-    print(f"Loading data from {args.input}...")
-    data = load_and_bin_data(args.input, config)
-    n_det = len(np.unique(data['detector']))
-    print(f"Data: {n_det} detectors (one mean per CCD)")
-    print(f"Rotator angle: {np.degrees(data['rotator_angle']):.2f} deg")
+        plot_fit_results(data, fit_params, args.params, args.output)
+        return
 
-    fit_names = [name for name, p in config.fit_params.items() if p['fit']]
+    # Load data
+    print(f"Loading data from {args.input}")
+    data = pd.read_parquet(args.input)
+
+    # Apply radial cut
+    r = np.sqrt(data.xfp**2 + data.yfp**2)
+    data = data[r < args.rcut].reset_index(drop=True)
+    print(f"After r < {args.rcut} mm cut: {len(data)} points")
 
     if args.no_fit:
-        print("\nComputing forward model with default values...")
-        fit_values = np.array([config.fit_params[n]['value'] for n in fit_names])
-    else:
-        print(f"\nFitting parameters: {fit_names}")
-        fit_values, minuit = fit_optics(data, config, verbose=args.verbose)
+        print("Skipping fit (--no-fit specified)")
+        return
 
-        print("\nFitted values:")
-        for name, val in zip(fit_names, fit_values):
-            print(f"  {name}: {val:.4e}")
+    # Load telescope
+    print(f"Loading telescope for band {args.band}")
+    telescope = get_telescope(args.band)
 
-        if minuit is not None:
-            print(f"\nFit converged: {minuit.fmin.is_valid}")
+    # Load starting values if provided
+    start_values = None
+    if args.start is not None:
+        with open(args.start, 'rb') as f:
+            start_values = pickle.load(f)
+        print(f"Using {args.start} as starting point")
 
-    print("\nComputing predicted moments...")
-    pred = forward_model(fit_values, fit_names, data, config, return_full=True)
+    # Fit
+    print(f"Fitting DOFs: {args.params}")
+    fitter = BatoidFitter(telescope, args.params)
+    params, cov_params = fitter.fit(data, args.band, seeing=[1.3, 1.3, 0], start=start_values)
 
-    print("\nPlotting comparison...")
-    plot_comparison(data, pred, args.output)
+    # Extract results
+    result = {key: val for key, val in zip(args.params, params[:-3])}
+    result['smxx'] = params[-3]
+    result['smyy'] = params[-2]
+    result['smxy'] = params[-1]
+
+    print("\nFitted parameters:")
+    for k, v in result.items():
+        print(f"  {k}: {v:.4f}")
+
+    # Save results
+    tag = args.tag
+    with open(f'fit_params{tag}.pkl', 'wb') as f:
+        pickle.dump(result, f)
+    print(f"Saved fit_params{tag}.pkl")
+
+    with open(f'cov_params{tag}.pkl', 'wb') as f:
+        pickle.dump(cov_params, f)
+    print(f"Saved cov_params{tag}.pkl")
+
+    # Compute fitted moments
+    residuals = fitter.residuals(params)
+    data['fmxx'] = data['mxx'] - residuals[0]
+    data['fmyy'] = data['myy'] - residuals[1]
+    data['fmxy'] = data['mxy'] - residuals[2]
+
+    # Save fit data
+    data.to_parquet(f'iq_fit{tag}.parquet')
+    print(f"Saved iq_fit{tag}.parquet")
+
+    # Plot
+    plot_fit_results(data, result, args.params, args.output)
 
 
 if __name__ == "__main__":
