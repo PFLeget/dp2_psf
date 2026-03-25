@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 """
-Fit optical parameters from PSF second moments using batoid ray tracing.
+Fit optical parameters from star second moments using batoid ray tracing.
 
 Based on fit_batoid.py approach:
 - Fits AOS DOFs + atmospheric seeing moments (smxx, smyy, smxy)
 - Uses WCS to convert focal plane (mm) to tangent plane angles (degrees)
 - Residuals: seeing_moment + batoid_moment - observed_moment
+
+Input: visitMappingFile (same format as FoVPlot_vs_secondMoment.py)
 """
 
 import numpy as np
@@ -14,17 +16,24 @@ import polars as pl
 import pickle
 import argparse
 import os
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from tqdm import tqdm
+
+import lsst.afw.cameraGeom as cameraGeom
+from lsst.obs.lsst import LsstCam
 
 import batoid
 from batoid_rubin import LSSTBuilder
 from scipy.optimize import leastsq
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 
+
+# Camera for coordinate transforms
+camera = LsstCam.getCamera()
 
 # Central wavelengths (nm)
 CENTRAL_WAVELENGTH = {'u': 360, 'g': 480, 'r': 625, 'i': 760, 'z': 875, 'y': 970}
@@ -37,6 +46,82 @@ AOS_DOF_INDICES = {
 
 MICRONS_TO_PIXELS = 0.1
 METERS_TO_MM = 1e3
+
+# Columns to read from parquet files (star moments, not PSF model)
+PARQUET_COLUMNS = [
+    'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
+    'slot_Centroid_x', 'slot_Centroid_y',
+    'detector', 'calib_psf_reserved',
+]
+
+
+def pixel_to_focal(x, y, det):
+    """Convert pixel coordinates to focal plane (mm)."""
+    tx = det.getTransform(cameraGeom.PIXELS, cameraGeom.FOCAL_PLANE)
+    fpx, fpy = tx.getMapping().applyForward(np.vstack((x, y)))
+    return fpx.ravel(), fpy.ravel()
+
+
+def load_visit_data(parquet_path):
+    """Load visit data from parquet file."""
+    table = pl.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
+
+    return {
+        'mxx': table['slot_Shape_xx'].to_numpy(),
+        'myy': table['slot_Shape_yy'].to_numpy(),
+        'mxy': table['slot_Shape_xy'].to_numpy(),
+        'xCCD': table['slot_Centroid_x'].to_numpy(),
+        'yCCD': table['slot_Centroid_y'].to_numpy(),
+        'detector': table['detector'].to_numpy(),
+        'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
+    }
+
+
+def load_single_visit_data(parquet_path, rcut=300):
+    """
+    Load and average star moments per CCD for a single visit.
+
+    Parameters
+    ----------
+    parquet_path : str
+        Path to parquet file
+    rcut : float
+        Radial cut in mm
+
+    Returns
+    -------
+    DataFrame with columns: det, xfp, yfp, mxx, myy, mxy
+    """
+    data = load_visit_data(parquet_path)
+    ccdIds = set(data['detector'])
+
+    rows = []
+    for ccd in ccdIds:
+        mask = (data['detector'] == ccd) & np.isfinite(data['mxx'])
+        if np.sum(mask) < 5:
+            continue
+
+        # Get mean position in focal plane
+        xCCD = np.mean(data['xCCD'][mask])
+        yCCD = np.mean(data['yCCD'][mask])
+        fpx, fpy = pixel_to_focal(np.array([xCCD]), np.array([yCCD]), camera[ccd])
+
+        # Apply radial cut
+        r = np.sqrt(fpx[0]**2 + fpy[0]**2)
+        if r > rcut:
+            continue
+
+        # Get mean moments
+        rows.append({
+            'det': ccd,
+            'xfp': fpx[0],
+            'yfp': fpy[0],
+            'mxx': np.mean(data['mxx'][mask]),
+            'myy': np.mean(data['myy'][mask]),
+            'mxy': np.mean(data['mxy'][mask]),
+        })
+
+    return pd.DataFrame(rows)
 
 
 def get_telescope(band):
@@ -185,30 +270,9 @@ class BatoidFitter:
         return out.flatten()
 
     def fit(self, data, band, seeing=None, start=None, verbose=True):
-        """
-        Fit AOS DOFs to data.
-
-        Parameters
-        ----------
-        data : DataFrame
-            Must contain columns: xfp, yfp, mxx, myy, mxy
-        band : str
-            Filter band
-        seeing : tuple, optional
-            Initial guess for (smxx, smyy, smxy)
-        start : dict, optional
-            Initial values for parameters
-
-        Returns
-        -------
-        params : array
-            Fitted parameters
-        cov : array
-            Covariance matrix
-        """
+        """Fit AOS DOFs to data."""
         self.eval_tg_plane_angles(data, band)
 
-        # Starting point
         starting_point = np.zeros(len(self.param_names) + self.n_extra_params)
         if seeing is not None:
             starting_point[-3:] = np.array(seeing)
@@ -222,7 +286,6 @@ class BatoidFitter:
                     i = ['smxx', 'smyy', 'smxy'].index(name)
                     starting_point[len(self.param_names) + i] = val
 
-        # Fit
         if verbose:
             print(f"Fitting {len(self.param_names)} DOFs: {self.param_names}")
             print(f"Starting point: {starting_point}")
@@ -286,44 +349,24 @@ def plot_ccd_polygons(ax, detectors, values, geometry, cmap, vmin, vmax):
 
 
 def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png', geometry=None):
-    """
-    Plot observed vs fitted moments.
-
-    Parameters
-    ----------
-    data : DataFrame
-        Must contain: det, xfp, yfp, mxx, myy, mxy, fmxx, fmyy, fmxy
-    fit_params : dict
-        Fitted parameters including smxx, smyy, smxy
-    dof_names : list
-        Names of fitted DOFs
-    """
+    """Plot observed vs fitted moments."""
     if geometry is None:
         geometry = load_ccd_geometry()
 
     fig, axes = plt.subplots(3, 4, figsize=(18, 14))
 
-    # Extract data
     detectors = data['det'].to_numpy() if hasattr(data['det'], 'to_numpy') else data['det'].values
     xfp = data['xfp'].to_numpy() if hasattr(data['xfp'], 'to_numpy') else data['xfp'].values
     yfp = data['yfp'].to_numpy() if hasattr(data['yfp'], 'to_numpy') else data['yfp'].values
 
-    # Observed moments (mean-subtracted for spatial pattern)
     obs_mxx = data['mxx'].to_numpy() if hasattr(data['mxx'], 'to_numpy') else data['mxx'].values
     obs_myy = data['myy'].to_numpy() if hasattr(data['myy'], 'to_numpy') else data['myy'].values
     obs_mxy = data['mxy'].to_numpy() if hasattr(data['mxy'], 'to_numpy') else data['mxy'].values
 
-    # Fitted moments
     fit_mxx = data['fmxx'].to_numpy() if hasattr(data['fmxx'], 'to_numpy') else data['fmxx'].values
     fit_myy = data['fmyy'].to_numpy() if hasattr(data['fmyy'], 'to_numpy') else data['fmyy'].values
     fit_mxy = data['fmxy'].to_numpy() if hasattr(data['fmxy'], 'to_numpy') else data['fmxy'].values
 
-    # Residuals
-    res_mxx = obs_mxx - fit_mxx
-    res_myy = obs_myy - fit_myy
-    res_mxy = obs_mxy - fit_mxy
-
-    # Compute T, e1, e2
     obs_T = obs_mxx + obs_myy
     obs_e1 = (obs_mxx - obs_myy) / obs_T
     obs_e2 = 2 * obs_mxy / obs_T
@@ -332,7 +375,6 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
     fit_e1 = (fit_mxx - fit_myy) / fit_T
     fit_e2 = 2 * fit_mxy / fit_T
 
-    # Mean-subtract for spatial patterns
     obs_dT = obs_T - np.nanmean(obs_T)
     obs_de1 = obs_e1 - np.nanmean(obs_e1)
     obs_de2 = obs_e2 - np.nanmean(obs_e2)
@@ -345,22 +387,17 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
     res_de1 = obs_de1 - fit_de1
     res_de2 = obs_de2 - fit_de2
 
-    # Color scales
     vmin_dT, vmax_dT = -0.5, 0.5
     vmin_de, vmax_de = -0.15, 0.15
     lim = 350
 
-    # Plot settings
     plot_data = [
-        # Row 0: Observed
         (0, 0, obs_dT, 'Observed dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
         (0, 1, obs_de1, 'Observed de1', vmin_de, vmax_de, 'de1'),
         (0, 2, obs_de2, 'Observed de2', vmin_de, vmax_de, 'de2'),
-        # Row 1: Fitted (batoid)
         (1, 0, fit_dT, 'Fitted dT (batoid)', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
         (1, 1, fit_de1, 'Fitted de1 (batoid)', vmin_de, vmax_de, 'de1'),
         (1, 2, fit_de2, 'Fitted de2 (batoid)', vmin_de, vmax_de, 'de2'),
-        # Row 2: Residuals
         (2, 0, res_dT, 'Residual dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
         (2, 1, res_de1, 'Residual de1', vmin_de, vmax_de, 'de1'),
         (2, 2, res_de2, 'Residual de2', vmin_de, vmax_de, 'de2'),
@@ -383,8 +420,6 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
         ax.set_xlim(-lim, lim)
         ax.set_ylim(-lim, lim)
 
-    # Column 4: Scatter plots and stats
-    # Scatter: observed vs fitted
     ax = axes[0, 3]
     ax.scatter(obs_dT, fit_dT, s=20, alpha=0.7)
     ax.plot([-0.5, 0.5], [-0.5, 0.5], 'k--', alpha=0.5)
@@ -406,12 +441,10 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
     ax.legend()
     ax.set_aspect('equal')
 
-    # Stats text
     ax = axes[2, 3]
     ax.axis('off')
 
-    stats_text = "Fitted parameters:\n"
-    stats_text += "-" * 30 + "\n"
+    stats_text = "Fitted parameters:\n" + "-" * 30 + "\n"
     for name in dof_names:
         if name in fit_params:
             stats_text += f"{name}: {fit_params[name]:.4f}\n"
@@ -420,15 +453,9 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
     stats_text += f"smyy: {fit_params.get('smyy', 0):.4f}\n"
     stats_text += f"smxy: {fit_params.get('smxy', 0):.4f}\n"
     stats_text += "-" * 30 + "\n"
-    stats_text += f"Correlations:\n"
-    stats_text += f"  dT:  {rho_T:.3f}\n"
-    stats_text += f"  de1: {rho_e1:.3f}\n"
-    stats_text += f"  de2: {rho_e2:.3f}\n"
+    stats_text += f"Correlations:\n  dT: {rho_T:.3f}\n  de1: {rho_e1:.3f}\n  de2: {rho_e2:.3f}\n"
     stats_text += "-" * 30 + "\n"
-    stats_text += f"RMS residuals:\n"
-    stats_text += f"  dT:  {np.std(res_dT):.4f}\n"
-    stats_text += f"  de1: {np.std(res_de1):.4f}\n"
-    stats_text += f"  de2: {np.std(res_de2):.4f}\n"
+    stats_text += f"RMS residuals:\n  dT: {np.std(res_dT):.4f}\n  de1: {np.std(res_de1):.4f}\n  de2: {np.std(res_de2):.4f}\n"
 
     ax.text(0.1, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', fontfamily='monospace')
@@ -441,15 +468,15 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fit optical parameters from PSF moments")
-    parser.add_argument('--input', type=str, default='iq_dat.parquet',
-                        help='Input parquet file with mxx, myy, mxy, xfp, yfp columns')
+    parser = argparse.ArgumentParser(description="Fit optical parameters from star moments (one fit per visit)")
+    parser.add_argument('--visitMappingFile', type=str, required=True,
+                        help='Path to visit_parquet_mapping.pkl')
+    parser.add_argument('--bands', type=str, default='r',
+                        help='Band(s) to process (default: r)')
     parser.add_argument('--band', type=str, default='r',
-                        help='Filter band (default: r)')
-    parser.add_argument('--output', type=str, default='fit_results.png',
-                        help='Output plot file')
-    parser.add_argument('--tag', type=str, default='',
-                        help='Tag for output files')
+                        help='Band for batoid telescope model (default: r)')
+    parser.add_argument('--repOut', type=str, default='./',
+                        help='Output directory for all files')
     parser.add_argument('--params', type=str, nargs='+',
                         default=['m2_dz', 'm2_rx', 'm2_ry', 'cam_dz', 'cam_rx', 'cam_ry'],
                         help='DOF parameters to fit')
@@ -457,41 +484,27 @@ def main():
                         help='Pickle file with starting values')
     parser.add_argument('--rcut', type=float, default=300,
                         help='Radial cut for vignetted data (mm)')
-    parser.add_argument('--no-fit', action='store_true',
-                        help='Skip fitting, just plot existing results')
-    parser.add_argument('--fit-file', type=str, default=None,
-                        help='Use existing fit parquet file for plotting')
+    parser.add_argument('--max_visits', type=int, default=None,
+                        help='Maximum number of visits to process')
 
     args = parser.parse_args()
 
-    # If just plotting existing results
-    if args.fit_file is not None:
-        print(f"Loading existing fit from {args.fit_file}")
-        data = pd.read_parquet(args.fit_file)
+    os.makedirs(args.repOut, exist_ok=True)
 
-        # Try to load fit params
-        params_file = f'fit_params{args.tag}.pkl'
-        if os.path.exists(params_file):
-            with open(params_file, 'rb') as f:
-                fit_params = pickle.load(f)
-        else:
-            fit_params = {}
+    # Load visit mapping
+    with open(args.visitMappingFile, 'rb') as f:
+        visit_mapping = pickle.load(f)
 
-        plot_fit_results(data, fit_params, args.params, args.output)
-        return
+    # Filter visits by band
+    selected_visits = []
+    for visit, info in visit_mapping.items():
+        if info['band'] in args.bands:
+            selected_visits.append((visit, info))
 
-    # Load data
-    print(f"Loading data from {args.input}")
-    data = pd.read_parquet(args.input)
+    if args.max_visits is not None and len(selected_visits) > args.max_visits:
+        selected_visits = selected_visits[:args.max_visits]
 
-    # Apply radial cut
-    r = np.sqrt(data.xfp**2 + data.yfp**2)
-    data = data[r < args.rcut].reset_index(drop=True)
-    print(f"After r < {args.rcut} mm cut: {len(data)} points")
-
-    if args.no_fit:
-        print("Skipping fit (--no-fit specified)")
-        return
+    print(f"Processing {len(selected_visits)} visits for bands: {args.bands}")
 
     # Load telescope
     print(f"Loading telescope for band {args.band}")
@@ -504,43 +517,62 @@ def main():
             start_values = pickle.load(f)
         print(f"Using {args.start} as starting point")
 
-    # Fit
-    print(f"Fitting DOFs: {args.params}")
-    fitter = BatoidFitter(telescope, args.params)
-    params, cov_params = fitter.fit(data, args.band, seeing=[1.3, 1.3, 0], start=start_values)
+    # Load CCD geometry once for plotting
+    geometry = load_ccd_geometry()
 
-    # Extract results
-    result = {key: val for key, val in zip(args.params, params[:-3])}
-    result['smxx'] = params[-3]
-    result['smyy'] = params[-2]
-    result['smxy'] = params[-1]
+    # Loop over visits
+    all_results = []
+    for visit, info in tqdm(selected_visits, desc="Fitting visits"):
+        try:
+            data = load_single_visit_data(info['parquet_path'], args.rcut)
+        except Exception as e:
+            print(f"  Warning: failed to load visit {visit}: {e}")
+            continue
 
-    print("\nFitted parameters:")
-    for k, v in result.items():
-        print(f"  {k}: {v:.4f}")
+        if len(data) < 10:
+            print(f"  Skipping visit {visit}: only {len(data)} CCDs")
+            continue
 
-    # Save results
-    tag = args.tag
-    with open(f'fit_params{tag}.pkl', 'wb') as f:
-        pickle.dump(result, f)
-    print(f"Saved fit_params{tag}.pkl")
+        # Fit
+        fitter = BatoidFitter(telescope, args.params)
+        try:
+            params, cov_params = fitter.fit(data, args.band, seeing=[1.3, 1.3, 0],
+                                             start=start_values, verbose=False)
+        except Exception as e:
+            print(f"  Fit failed for visit {visit}: {e}")
+            continue
 
-    with open(f'cov_params{tag}.pkl', 'wb') as f:
-        pickle.dump(cov_params, f)
-    print(f"Saved cov_params{tag}.pkl")
+        # Extract results
+        result = {'visit': visit, 'band': info['band']}
+        for key, val in zip(args.params, params[:-3]):
+            result[key] = val
+        result['smxx'] = params[-3]
+        result['smyy'] = params[-2]
+        result['smxy'] = params[-1]
 
-    # Compute fitted moments
-    residuals = fitter.residuals(params)
-    data['fmxx'] = data['mxx'] - residuals[0]
-    data['fmyy'] = data['myy'] - residuals[1]
-    data['fmxy'] = data['mxy'] - residuals[2]
+        # Compute residuals
+        residuals = fitter.residuals(params)
+        result['chi2'] = (residuals**2).sum()
+        result['n_ccd'] = len(data)
 
-    # Save fit data
-    data.to_parquet(f'iq_fit{tag}.parquet')
-    print(f"Saved iq_fit{tag}.parquet")
+        all_results.append(result)
 
-    # Plot
-    plot_fit_results(data, result, args.params, args.output)
+        # Save per-visit data with fitted moments
+        data['fmxx'] = data['mxx'] - residuals[0]
+        data['fmyy'] = data['myy'] - residuals[1]
+        data['fmxy'] = data['mxy'] - residuals[2]
+        data.to_parquet(os.path.join(args.repOut, f'iq_fit_visit{visit}.parquet'))
+
+        # Save per-visit plot
+        plot_fit_results(data, result, args.params,
+                         os.path.join(args.repOut, f'fit_results_visit{visit}.png'),
+                         geometry=geometry)
+
+    # Save summary of all results
+    results_df = pd.DataFrame(all_results)
+    output_file = os.path.join(args.repOut, f'fit_results_{args.bands}.parquet')
+    results_df.to_parquet(output_file)
+    print(f"\nSaved {len(results_df)} fit results to {output_file}")
 
 
 if __name__ == "__main__":
