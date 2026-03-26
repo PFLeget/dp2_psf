@@ -348,7 +348,7 @@ def plot_ccd_polygons(ax, detectors, values, geometry, cmap, vmin, vmax):
     return collection
 
 
-def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png', geometry=None):
+def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png', geometry=None, visit=None, band=None):
     """Plot observed vs fitted moments."""
     if geometry is None:
         geometry = load_ccd_geometry()
@@ -460,7 +460,12 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
     ax.text(0.1, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', fontfamily='monospace')
 
-    plt.suptitle('Batoid Optical Fit Results', fontsize=14, fontweight='bold')
+    title = 'Batoid Optical Fit Results'
+    if visit is not None:
+        title += f' - Visit {visit}'
+    if band is not None:
+        title += f' ({band}-band)'
+    plt.suptitle(title, fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(output_file, dpi=150)
     plt.close(fig)
@@ -553,7 +558,7 @@ def main():
     geometry = load_ccd_geometry()
     plot_fit_results(data, result, args.params,
                      os.path.join(args.repOut, f'fit_results_visit{args.visitID}.png'),
-                     geometry=geometry)
+                     geometry=geometry, visit=args.visitID, band=band)
 
 
 if __name__ == "__main__":
