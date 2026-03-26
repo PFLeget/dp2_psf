@@ -468,13 +468,11 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fit optical parameters from star moments (one fit per visit)")
+    parser = argparse.ArgumentParser(description="Fit optical parameters from star moments for a single visit")
     parser.add_argument('--visitMappingFile', type=str, required=True,
                         help='Path to visit_parquet_mapping.pkl')
-    parser.add_argument('--bands', type=str, default='r',
-                        help='Band(s) to process (default: r)')
-    parser.add_argument('--band', type=str, default='r',
-                        help='Band for batoid telescope model (default: r)')
+    parser.add_argument('--visitID', type=int, required=True,
+                        help='Visit ID to process')
     parser.add_argument('--repOut', type=str, default='./',
                         help='Output directory for all files')
     parser.add_argument('--params', type=str, nargs='+',
@@ -484,8 +482,6 @@ def main():
                         help='Pickle file with starting values')
     parser.add_argument('--rcut', type=float, default=300,
                         help='Radial cut for vignetted data (mm)')
-    parser.add_argument('--max_visits', type=int, default=None,
-                        help='Maximum number of visits to process')
 
     args = parser.parse_args()
 
@@ -495,20 +491,18 @@ def main():
     with open(args.visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
 
-    # Filter visits by band
-    selected_visits = []
-    for visit, info in visit_mapping.items():
-        if info['band'] in args.bands:
-            selected_visits.append((visit, info))
+    if args.visitID not in visit_mapping:
+        raise ValueError(f"Visit {args.visitID} not found in mapping file")
 
-    if args.max_visits is not None and len(selected_visits) > args.max_visits:
-        selected_visits = selected_visits[:args.max_visits]
+    info = visit_mapping[args.visitID]
+    band = info['band']
+    parquet_path = info['parquet_path']
 
-    print(f"Processing {len(selected_visits)} visits for bands: {args.bands}")
+    print(f"Processing visit {args.visitID}, band={band}")
+    print(f"  Input: {parquet_path}")
 
-    # Load telescope
-    print(f"Loading telescope for band {args.band}")
-    telescope = get_telescope(args.band)
+    # Load telescope for this band
+    telescope = get_telescope(band)
 
     # Load starting values if provided
     start_values = None
@@ -517,62 +511,49 @@ def main():
             start_values = pickle.load(f)
         print(f"Using {args.start} as starting point")
 
-    # Load CCD geometry once for plotting
+    # Load data
+    data = load_single_visit_data(parquet_path, args.rcut)
+    print(f"  Loaded {len(data)} CCDs")
+
+    # Fit
+    fitter = BatoidFitter(telescope, args.params)
+    params, cov_params = fitter.fit(data, band, seeing=[1.3, 1.3, 0],
+                                     start=start_values, verbose=True)
+
+    # Extract results
+    result = {'visit': args.visitID, 'band': band}
+    for key, val in zip(args.params, params[:-3]):
+        result[key] = val
+    result['smxx'] = params[-3]
+    result['smyy'] = params[-2]
+    result['smxy'] = params[-1]
+
+    # Compute residuals
+    residuals = fitter.residuals(params)
+    result['chi2'] = (residuals**2).sum()
+    result['n_ccd'] = len(data)
+
+    print("\nFitted parameters:")
+    for k, v in result.items():
+        print(f"  {k}: {v}")
+
+    # Save data with fitted moments
+    data['fmxx'] = data['mxx'] - residuals[0]
+    data['fmyy'] = data['myy'] - residuals[1]
+    data['fmxy'] = data['mxy'] - residuals[2]
+    data.to_parquet(os.path.join(args.repOut, f'iq_fit_visit{args.visitID}.parquet'))
+    print(f"Saved iq_fit_visit{args.visitID}.parquet")
+
+    # Save fit params
+    result_df = pd.DataFrame([result])
+    result_df.to_parquet(os.path.join(args.repOut, f'fit_params_visit{args.visitID}.parquet'))
+    print(f"Saved fit_params_visit{args.visitID}.parquet")
+
+    # Save plot
     geometry = load_ccd_geometry()
-
-    # Loop over visits
-    all_results = []
-    for visit, info in tqdm(selected_visits, desc="Fitting visits"):
-        try:
-            data = load_single_visit_data(info['parquet_path'], args.rcut)
-        except Exception as e:
-            print(f"  Warning: failed to load visit {visit}: {e}")
-            continue
-
-        if len(data) < 10:
-            print(f"  Skipping visit {visit}: only {len(data)} CCDs")
-            continue
-
-        # Fit
-        fitter = BatoidFitter(telescope, args.params)
-        try:
-            params, cov_params = fitter.fit(data, args.band, seeing=[1.3, 1.3, 0],
-                                             start=start_values, verbose=False)
-        except Exception as e:
-            print(f"  Fit failed for visit {visit}: {e}")
-            continue
-
-        # Extract results
-        result = {'visit': visit, 'band': info['band']}
-        for key, val in zip(args.params, params[:-3]):
-            result[key] = val
-        result['smxx'] = params[-3]
-        result['smyy'] = params[-2]
-        result['smxy'] = params[-1]
-
-        # Compute residuals
-        residuals = fitter.residuals(params)
-        result['chi2'] = (residuals**2).sum()
-        result['n_ccd'] = len(data)
-
-        all_results.append(result)
-
-        # Save per-visit data with fitted moments
-        data['fmxx'] = data['mxx'] - residuals[0]
-        data['fmyy'] = data['myy'] - residuals[1]
-        data['fmxy'] = data['mxy'] - residuals[2]
-        data.to_parquet(os.path.join(args.repOut, f'iq_fit_visit{visit}.parquet'))
-
-        # Save per-visit plot
-        plot_fit_results(data, result, args.params,
-                         os.path.join(args.repOut, f'fit_results_visit{visit}.png'),
-                         geometry=geometry)
-
-    # Save summary of all results
-    results_df = pd.DataFrame(all_results)
-    output_file = os.path.join(args.repOut, f'fit_results_{args.bands}.parquet')
-    results_df.to_parquet(output_file)
-    print(f"\nSaved {len(results_df)} fit results to {output_file}")
+    plot_fit_results(data, result, args.params,
+                     os.path.join(args.repOut, f'fit_results_visit{args.visitID}.png'),
+                     geometry=geometry)
 
 
 if __name__ == "__main__":
