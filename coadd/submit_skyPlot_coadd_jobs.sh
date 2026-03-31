@@ -8,7 +8,7 @@
 # Configuration
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/coadd"
 SCRIPT_NAME="skyPlot_coadd_secondMoment.py"
-TRACT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/coadd/data/tract_parquet_mapping.pkl"
+TRACT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/tract_parquet_mapping.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT_PLOT="${SCRIPT_DIR}/plots"
 

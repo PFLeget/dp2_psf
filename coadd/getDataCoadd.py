@@ -50,7 +50,7 @@ def getDataCoadd(repOut='data/'):
 
 def main():
     parser = argparse.ArgumentParser(description="Create tract to parquet file mapping for coadd data.")
-    parser.add_argument("--repOut", type=str, default='data/', help="Output directory for the mapping pickle file")
+    parser.add_argument("--repOut", type=str, default='../data/', help="Output directory for the mapping pickle file")
     args = parser.parse_args()
 
     getDataCoadd(repOut=args.repOut)
