@@ -18,11 +18,11 @@ BAND="r"
 # EDIT COLOR SCALES HERE (symmetric: -val to +val)
 # ============================================
 COLOR_SCALE_T=0.5          # T (pixel^2)
-COLOR_SCALE_e1=0.05        # e1
-COLOR_SCALE_e2=0.05        # e2
-COLOR_SCALE_dT_T=0.01      # dT/T
-COLOR_SCALE_de1=0.01       # de1
-COLOR_SCALE_de2=0.01       # de2
+COLOR_SCALE_e1=0.1        # e1
+COLOR_SCALE_e2=0.1        # e2
+COLOR_SCALE_dT_T=0.005      # dT/T
+COLOR_SCALE_de1=0.001       # de1
+COLOR_SCALE_de2=0.001       # de2
 # ============================================
 
 # Create output directory

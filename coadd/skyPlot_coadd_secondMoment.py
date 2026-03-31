@@ -193,7 +193,8 @@ def plot_Sky_second_Moment_coadd(band='r', tractMappingFile="data/tract_parquet_
         Radius around SMC to exclude (degrees)
     """
 
-    CMAP = plt.cm.inferno
+   #CMAP = plt.cm.inferno
+   CMAP = plt.cm.seismic
 
     if pklInput is None:
         # Load the tract mapping
