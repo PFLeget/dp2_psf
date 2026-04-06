@@ -32,14 +32,15 @@ def getDataSingleVisitSkyCoord(repOut='../data/'):
         visit = dsr.dataId["visit"]
         band = dsr.dataId["band"]
 
-        # Get the URI to the parquet file
-        uri = butler.getURI("refit_psf_star", instrument="LSSTCam", visit=visit)
-        parquet_path = uri.geturl()
+        if visit not in visit_mapping:
+            # Get the URI to the parquet file
+            uri = butler.getURI("refit_psf_star", instrument="LSSTCam", visit=visit)
+            parquet_path = uri.geturl()
 
-        visit_mapping[visit] = {
-            'parquet_path': parquet_path,
-            'band': band,
-        }
+            visit_mapping[visit] = {
+                'parquet_path': parquet_path,
+                'band': band,
+            }
 
     # Save the mapping
     os.makedirs(repOut, exist_ok=True)
