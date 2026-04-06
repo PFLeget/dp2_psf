@@ -305,18 +305,23 @@ def plot_rho_statistics(rho_stats, output_file, title=None):
     print(f"Saved plot: {output_file}")
 
 
-def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25.):
+def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None):
     """Run rho statistics on coadd data."""
     print(f"Computing rho statistics for COADD, band={band}")
 
     with open(tractMappingFile, 'rb') as f:
         tract_mapping = pickle.load(f)
 
-    print(f"  Loading {len(tract_mapping)} tracts...")
+    # Limit number of tracts for testing
+    tract_items = list(tract_mapping.items())
+    if max_tracts is not None and len(tract_items) > max_tracts:
+        tract_items = tract_items[:max_tracts]
+
+    print(f"  Loading {len(tract_items)} tracts...")
 
     all_data = {k: [] for k in ['ixx', 'iyy', 'ixy', 'ixx_psf', 'iyy_psf', 'ixy_psf', 'ra', 'dec']}
 
-    for tract, info in tqdm(tract_mapping.items(), desc="Loading tracts"):
+    for tract, info in tqdm(tract_items, desc="Loading tracts"):
         try:
             data = load_coadd_data(info['parquet_path'], band)
             for k in all_data:
@@ -378,7 +383,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Coadd {band}-band")
 
 
-def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25.):
+def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None):
     """Run rho statistics on single visit data."""
     print(f"Computing rho statistics for SINGLE VISIT, band={band}")
 
@@ -387,6 +392,11 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
 
     # Filter by band
     selected_visits = [(v, info) for v, info in visit_mapping.items() if info['band'] == band]
+
+    # Limit number of visits for testing
+    if max_visits is not None and len(selected_visits) > max_visits:
+        selected_visits = selected_visits[:max_visits]
+
     print(f"  Loading {len(selected_visits)} visits for band {band}...")
 
     all_data = {k: [] for k in ['ixx', 'iyy', 'ixy', 'ixx_psf', 'iyy_psf', 'ixy_psf', 'ra', 'dec']}
@@ -468,6 +478,8 @@ def main():
                         help='Minimum |b| for MW exclusion (degrees)')
     parser.add_argument('--no_exclude_crowded', action='store_true',
                         help='Do not exclude crowded regions')
+    parser.add_argument('--max', type=int, default=None,
+                        help='Maximum number of tracts/visits to process (for testing)')
 
     args = parser.parse_args()
 
@@ -477,12 +489,14 @@ def main():
         if args.tractMappingFile is None:
             raise ValueError("--tractMappingFile required for coadd mode")
         run_coadd(args.band, args.tractMappingFile, args.repOut,
-                  exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min)
+                  exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
+                  max_tracts=args.max)
     else:
         if args.visitMappingFile is None:
             raise ValueError("--visitMappingFile required for single_visit mode")
         run_single_visit(args.band, args.visitMappingFile, args.repOut,
-                         exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min)
+                         exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
+                         max_visits=args.max)
 
 
 if __name__ == "__main__":
