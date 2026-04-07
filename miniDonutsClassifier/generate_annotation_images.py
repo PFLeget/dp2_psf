@@ -41,7 +41,7 @@ def get_z4_flag(z4_median):
         return "likely_good"
 
 
-def generate_star_grid(butler, visit, detector, stampSize=DEFAULT_STAMP_SIZE):
+def generate_star_grid(butler, visit, detector, psfTable, stampSize=DEFAULT_STAMP_SIZE):
     """
     Generate a 3x3 grid of star stamps for a given visit/detector.
 
@@ -54,12 +54,6 @@ def generate_star_grid(butler, visit, detector, stampSize=DEFAULT_STAMP_SIZE):
     }
 
     try:
-        # Get star positions from parquet
-        uri = butler.getURI("refit_psf_star", **dataID)
-        parquet_path = uri.geturl()
-        psfTable = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
-        psfTable = psfTable.filter(polars.col("detector") == detector)
-
         if len(psfTable) < 9:
             print(f"    Not enough stars ({len(psfTable)}) for detector {detector}")
             return None
@@ -135,14 +129,14 @@ def generate_visit_images(visit, dicZernike, repoButler="dp2_prep",
     # Initialize butler
     butler = Butler(repoButler, collections=collectionButler)
 
-    # Get all detectors for this visit
-    refit_psf_star_dsrs = list(butler.registry.queryDatasets(
-        "refit_psf_star",
-        instrument="LSSTCam",
-        visit=visit
-    ))
+    # Load parquet once for all detectors
+    dataID_visit = {"instrument": "LSSTCam", "visit": visit}
+    uri = butler.getURI("refit_psf_star", **dataID_visit)
+    parquet_path = uri.geturl()
+    psfTable_all = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
 
-    detectors = sorted(set(dsr.dataId["detector"] for dsr in refit_psf_star_dsrs))
+    # Get detectors from parquet
+    detectors = sorted(psfTable_all["detector"].unique().to_list())
     print(f"  Found {len(detectors)} detectors")
 
     # Create output directory
@@ -150,7 +144,8 @@ def generate_visit_images(visit, dicZernike, repoButler="dp2_prep",
 
     # Generate images for each detector
     for detector in detectors:
-        fig = generate_star_grid(butler, visit, detector, stampSize)
+        psfTable_det = psfTable_all.filter(polars.col("detector") == detector)
+        fig = generate_star_grid(butler, visit, detector, psfTable_det, stampSize)
 
         if fig is not None:
             # Add title with visit, detector, and flag
