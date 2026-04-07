@@ -45,6 +45,7 @@ AOS_DOF_INDICES = {
 } | {f'm1m3_bend_{i}': 10 + i for i in range(20)} | {f'm2_bend_{i}': 30 + i for i in range(20)}
 
 MICRONS_TO_PIXELS = 0.1
+METERS_TO_PIXELS = 1e5
 METERS_TO_MM = 1e3
 
 # Columns to read from parquet files (star moments, not PSF model)
@@ -129,7 +130,7 @@ def get_telescope(band):
     return batoid.Optic.fromYaml(f'Rubin_v3.14_{band}.yaml')
 
 
-def launch_rays(telescope, band, ax, ay):
+def launch_rays_simple(telescope, band, ax, ay):
     """
     Launch rays for spots at angles (degrees) ax, ay in tangent plane.
     Returns DataFrame with moments in pixels^2.
@@ -167,6 +168,72 @@ def launch_rays(telescope, band, ax, ay):
 
         spots.loc[len(spots)] = [alpha, beta, x0, y0, mxx, myy, mxy]
 
+    return spots
+
+def launch_rays(telescope, band, ax, ay, atmos, with_wcs=False, output_file=None):
+    """
+    launch rays for a few spots at angles (degrees) ax ay
+    in tangent plane . 
+    atmos is a triplet of arrays that sample x,y,value of the atmopheric seeing
+    Returns a panda DataFrame.
+    moments in pixels^2
+    """
+    pixel_size = 10 # microns
+    # input_angles (degrees)
+    
+    wavelength = CENTRAL_WAVELENGTH[band]
+    def compute_rays(alpha,beta) :
+        rays = batoid.RayVector.asPolar(
+            optic=telescope,
+            inner=telescope.pupilSize/2*telescope.pupilObscuration,
+            theta_x=np.deg2rad(alpha), theta_y=np.deg2rad(beta),
+            nrad=12, naz=48, wavelength=wavelength*1e-9)
+        # the speed depends a lot on nrad and naz.
+        # On an example, those were 48 and 192
+        telescope.trace(rays)
+        return rays
+
+    out_columns = ['theta_x','theta_y']
+    spots = None
+    if output_file is not None:
+        all_rays = pd.DataFrame(columns=['theta_x','theta_y','x','y'])
+    if with_wcs : spots['wcs'] = []
+    atx,aty,atw = atmos
+    for alpha,beta in zip(ax,ay):
+        rays = compute_rays(alpha,beta)
+        w0 = ~rays.vignetted
+        # position in pixelss and moments in pix**2        
+        x0, y0 = rays[w0].x.mean()*METERS_TO_PIXELS, rays[w0].y.mean()*METERS_TO_PIXELS
+        xx,yy,ww = convolve_with_seeing(rays[w0].x*METERS_TO_PIXELS-x0,
+                                        rays[w0].y*METERS_TO_PIXELS-y0,
+                                        atx,aty,atw)
+        moments_dict = gauss_moments(xx,yy,ww)
+        data = [alpha,beta]+list(moments_dict.values())
+        if spots is None:
+            out_columns += list(moments_dict.keys())
+            spots = pd.DataFrame(columns=out_columns)
+            if with_wcs : spots['wcs'] = []
+        if with_wcs:
+            eps=1e-5
+            rays_x = compute_rays(alpha+eps, beta)
+            rays_y = compute_rays(alpha, beta+eps)
+            # use the intersection of vignetting, or the result is biased
+            w = w0 & (~rays_x.vignetted)&(~rays_y.vignetted)
+            x0 = rays[w].x.mean()*METERS_TO_PIXELS
+            y0 = rays[w].y.mean()*METERS_TO_PIXELS
+            m2p = METERS_TO_PIXELS
+            cxx, cxy = rays_x[w].x.mean()*m2p, rays_x[w].y.mean()*m2p
+            cyx, cyy = rays_y[w].x.mean()*m2p,rays_y[w].y.mean()*m2p
+            a11,a12 = cxx-x0, cxy - y0
+            a21,a22 = cyx-x0, cyy - y0
+            wcs = np.linalg.inv(np.array([[a11,a12],[a21,a22]])/eps)
+            # wcs /= pixel_size # aij unit is degrees pper pixel 
+            data.append(wcs)
+        spots.loc[len(spots)] = data
+        if output_file is not None:
+            for r in rays[w0] :  # for some reason r.x is a 1-item list
+                all_rays.loc[len(all_rays)] = [alpha,beta,r.x[0],r.y[0]]
+    if output_file is not None: all_rays.to_parquet(output_file)
     return spots
 
 
@@ -215,11 +282,93 @@ class WCS:
         A = np.array([xfp * 0 + 1, xfp, yfp, xfp**2, yfp**2, xfp * yfp])
         return self.coeff.T.dot(A)
 
+def gauss_moments(x,y, win=None):
+    """
+    Computes Gauss moments à la HSM, for discrete samples given as lists of x,y,win.
+    returns a dictionnary of moments (mxx, myy, mxy), 3rd order moments, and position (x0,Y0)
+    """
+    mxx = x.var()
+    myy = y.var()
+    x0 = x.mean()
+    y0 = y.mean()
+    mxy = ((x-x0)*(y-y0)).mean()
+    det = mxx*myy-mxy**2
+    wxx = myy/det
+    wyy = mxx/det
+    wxy = -mxy/det
+    for iter in range(60):
+        dx = x-x0
+        dy = y-y0
+        w = np.exp(-0.5*(wxx*dx**2+wyy*dy**2+2*wxy*dx*dy))
+        if win is not None : 
+            w*= win
+        wsum = w.sum()
+        ddx = (dx*w).sum()/wsum
+        ddy = (dy*w).sum()/wsum
+        mxx = (w*dx**2).sum()/wsum
+        myy = (w*dy**2).sum()/wsum
+        mxy = (w*dx*dy).sum()/wsum
+        mxx -= ddx**2
+        myy -= ddy**2
+        mxy -= ddx*ddy
+        mxx *= 2
+        myy *= 2
+        mxy *= 2
+        det = mxx*myy-mxy**2
+        nwxx = myy/det
+        nwyy = mxx/det
+        nwxy = -mxy/det
+        if (np.abs(wxx-nwxx)+np.abs(wyy-nwyy)+np.abs(wxy-nwxy))/wxx < 1e-6 :
+            break
+        x0 += ddx
+        y0 += ddy
+        wxx = nwxx
+        wyy = nwyy
+        wxy = nwxy
+        #print(iter,x0,y0,wxx,wyy,wxy)
+    mx3 = ((x-x0)**3*w).sum()/wsum
+    mx2y = ((x-x0)**2*(y-y0)*w).sum()/wsum
+    mxy2 = ((x-x0)*(y-y0)**2*w).sum()/wsum
+    my3 = ((y-y0)**3*w).sum()/wsum
+    return {"mxx":mxx,"myy":myy,"mxy":mxy,"x0":x0,"y0":y0, "mx2y":mx2y,
+            "mx3":mx3, "mx2y":mx2y,"mxy2":mxy2, "my3":my3}
+
+
+def convolve_with_seeing(x,y, xat, yat, w):
+    """
+    x,y array of coordinates on the focal plane (spot diagram)
+    xat, yat, w : spot diagram of the atmosphere, weighted by w
+    
+    return 2 array of coordinates resulting froim the "convolution" of both inputs
+    with len = product of the 2 inputs.
+    """
+    Xout = x + xat[:, np.newaxis]
+    Yout = y + yat[:, np.newaxis]
+    Wout = np.ones_like(x)*w[:, np.newaxis]
+    return Xout.flatten(),Yout.flatten(), Wout.flatten()
+
+def atmosphere_spot_diagram(mxx,myy,mxy, type = "Gauss"):
+    """
+    sample the seeing disk (mxx,myy,nmxy) in focal plane
+    """
+    assert type=="Gauss", "alternatives to Gauss not implemented (yet)"
+    x = np.linspace(-3,3,7) # sampling : 1 pixel
+    y = x
+    det = mxx*myy-mxy**2
+    assert det>0, "convolve_with_seeing: non pos-def PSF !"
+    scale = np.pow(det,0.25)
+    xx,yy = np.meshgrid(x*scale,y*scale)
+    xx,yy = xx.flatten(), yy.flatten()
+    wxx = myy/det
+    wyy = mxx/det
+    wxy = -mxy/det
+    return xx, yy, np.exp(-0.5*(wxx*xx**2 + wyy*yy**2 + 2*wxy*xx*yy))
+
 
 class BatoidFitter:
     """Fitter for AOS DOFs using batoid ray tracing."""
 
-    def __init__(self, ref_telescope, param_names):
+    def __init__(self, ref_telescope, param_names, options):
         for param in param_names:
             if param not in AOS_DOF_INDICES:
                 raise ValueError(f"{param} is not in AOS param list: {list(AOS_DOF_INDICES.keys())}")
@@ -228,6 +377,7 @@ class BatoidFitter:
         self.param_names = param_names
         self.n_extra_params = 3  # Atmospheric seeing: smxx, smyy, smxy
         self.to_fit = None
+        self.options = options
         self.band_for_fit = None
 
     def move_parts(self, what, shifts):
@@ -253,8 +403,18 @@ class BatoidFitter:
 
         ax = self.to_fit.ax.to_numpy()
         ay = self.to_fit.ay.to_numpy()
-        spots = launch_rays(offset_tel, self.band_for_fit, ax, ay)
 
+        if self.options.use_gauss_moments:
+            atmos = atmosphere_spot_diagram(smxx,smyy,smxy)
+            spots = launch_rays(offset_tel, self.band_for_fit, ax, ay,
+                                atmos, with_wcs=False, output_file=None)
+            # the atmosphere is included in the spot moments, set it to zero in the residuals calculation
+            smxx = 0
+            smyy = 0
+            smxy = 0
+        else:
+            spots = launch_rays_simple(offset_tel, self.band_for_fit, ax, ay)
+        
         momres = np.array([
             smxx + spots.mxx - self.to_fit.mxx,
             smyy + spots.myy - self.to_fit.myy,
@@ -487,6 +647,9 @@ def main():
                         help='Pickle file with starting values')
     parser.add_argument('--rcut', type=float, default=300,
                         help='Radial cut for vignetted data (mm)')
+    parser.add_argument('--gm', action = "store_true", #default is false
+                        dest="use_gauss_moments",
+                        help='use HSM gauss moments ')
 
     args = parser.parse_args()
 
@@ -521,7 +684,7 @@ def main():
     print(f"  Loaded {len(data)} CCDs")
 
     # Fit
-    fitter = BatoidFitter(telescope, args.params)
+    fitter = BatoidFitter(telescope, args.params, args)
     params, cov_params = fitter.fit(data, band, seeing=[1.3, 1.3, 0],
                                      start=start_values, verbose=True)
 
