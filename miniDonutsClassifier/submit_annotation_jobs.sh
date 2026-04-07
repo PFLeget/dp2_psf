@@ -14,6 +14,7 @@ SCRIPT_NAME="generate_annotation_images.py"
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT="${SCRIPT_DIR}/plotForAnnotation"
 DIC_ZERNIKE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_to_band_mapv2.pkl"
+VISIT_PARQUET_MAP="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl"
 
 VISITS_PER_JOB=10
 
@@ -35,10 +36,19 @@ import numpy as np
 with open("${DIC_ZERNIKE}", 'rb') as f:
     zernike_table = pickle.load(f)
 
-# Compute z4 median for each visit
+# Load DP2 visits
+with open("${VISIT_PARQUET_MAP}", 'rb') as f:
+    dp2_visits = set(pickle.load(f).keys())
+
+# Get intersection of DP2 visits and Zernike visits
+zernike_visits = set(zernike_table.keys())
+valid_visits = dp2_visits & zernike_visits
+print(f"# DP2 visits: {len(dp2_visits)}, Zernike visits: {len(zernike_visits)}, Intersection: {len(valid_visits)}", file=__import__('sys').stderr)
+
+# Compute z4 median for each visit in intersection
 visits = []
 z4_values = []
-for visit in zernike_table:
+for visit in valid_visits:
     z4_med = np.nanmedian(zernike_table[visit]['z4'])
     if np.isfinite(z4_med):
         visits.append(visit)
@@ -48,7 +58,7 @@ visits = np.array(visits)
 z4_values = np.array(z4_values)
 
 # Split by threshold
-threshold = 1.8
+threshold = 1.5
 likely_bad_mask = np.abs(z4_values + 0.25) > threshold
 likely_good_mask = ~likely_bad_mask
 
