@@ -4,7 +4,7 @@ Average star images as a function of Zernike coefficient.
 
 For each bin of a given Zernike coefficient (e.g., z4), grab all stars
 from visits in that bin (on a single detector) and compute the average
-star image.
+star image. Supports combining multiple bands.
 """
 
 import numpy as np
@@ -33,27 +33,38 @@ PARQUET_COLUMNS = [
 ]
 
 
-def get_zernike_binning(zernikeKey):
-    """Get binning parameters for a given Zernike coefficient."""
+def get_zernike_binning(zernikeKey, z_all):
+    """
+    Get binning parameters for a given Zernike coefficient.
+
+    Auto-determines range from data with narrower binning.
+    """
+    # Half bin sizes (narrower than before)
     if zernikeKey == 'z4':
-        z_central = np.linspace(-1, 1, 41)[5:36]
-        half_bin_size = 0.15
+        half_bin_size = 0.075  # was 0.15
     elif zernikeKey in ['z5', 'z6']:
-        z_central = np.linspace(-0.5, 0.5, 41)
-        half_bin_size = 0.1
+        half_bin_size = 0.05  # was 0.1
     elif zernikeKey == 'z7':
-        z_central = np.linspace(-0.25, 0.5, 41)
-        half_bin_size = 0.03 * 3
+        half_bin_size = 0.045  # was 0.09
     elif zernikeKey in ['z8', 'z9', 'z10']:
-        z_central = np.linspace(-0.25, 0.25, 41)
-        half_bin_size = 0.03 * 3
+        half_bin_size = 0.045  # was 0.09
     elif zernikeKey == 'z11':
-        z_central = np.linspace(-0.25, 0.25, 41)
-        half_bin_size = 0.03
+        half_bin_size = 0.015  # was 0.03
     else:
-        # Default binning for other Zernikes
-        z_central = np.linspace(-0.5, 0.5, 21)
-        half_bin_size = 0.1
+        half_bin_size = 0.05
+
+    # Auto-determine range from data
+    z_min_data = np.min(z_all)
+    z_max_data = np.max(z_all)
+
+    # Add small margin
+    margin = half_bin_size
+    z_start = z_min_data - margin
+    z_end = z_max_data + margin
+
+    # Create bin centers
+    n_bins = int(np.ceil((z_end - z_start) / (2 * half_bin_size))) + 1
+    z_central = np.linspace(z_start + half_bin_size, z_end - half_bin_size, n_bins)
 
     return z_central, half_bin_size
 
@@ -133,7 +144,7 @@ def compute_average_star(all_stars, all_weights):
 
 
 def plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey, n_stars,
-                     output_file, bin_idx):
+                     output_file, bin_idx, bands):
     """Plot the averaged star and Zernike distribution."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     plt.subplots_adjust(wspace=0.3)
@@ -146,16 +157,15 @@ def plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey, n_sta
         plt.colorbar(im, ax=ax1, label='Normalized flux')
     else:
         ax1.text(0.5, 0.5, 'No stars', ha='center', va='center', transform=ax1.transAxes)
-    ax1.set_title(f'Average PSF ({n_stars} stars)\n{zernikeKey} = {z_median:.3f}', fontsize=14)
+    ax1.set_title(f'Average PSF ({n_stars} stars, bands: {bands})\n{zernikeKey} = {z_median:.3f}', fontsize=14)
     ax1.set_xlabel('x (pixels)')
     ax1.set_ylabel('y (pixels)')
 
     # Right: Zernike distribution
     ax2 = axes[1]
-    if zernikeKey == 'z4':
-        binning = np.linspace(-1, 1, 50)
-    else:
-        binning = np.linspace(-0.6, 0.6, 50)
+    # Auto binning for histogram
+    z_range = np.max(z_all) - np.min(z_all)
+    binning = np.linspace(np.min(z_all) - 0.1 * z_range, np.max(z_all) + 0.1 * z_range, 50)
 
     ax2.hist(z_all, bins=binning, color='blue', alpha=0.7, edgecolor='black')
     ylim = ax2.get_ylim()
@@ -179,7 +189,7 @@ def plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey, n_sta
     print(f"  Saved: {output_file}")
 
 
-def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
+def avgPSF_vs_Zernike(bands='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
                       visitMappingFile="data/visit_parquet_mapping.pkl",
                       dicZernike="data/visit_to_band_mapv2.pkl",
                       repoButler="dp2_prep",
@@ -187,14 +197,15 @@ def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
                       repOutPlot='plots/',
                       repOutFile='data/',
                       stampSize=DEFAULT_STAMP_SIZE,
-                      max_visits_per_bin=None):
+                      max_visits_per_bin=None,
+                      bin_idx=None):
     """
     Compute average PSF as a function of Zernike coefficient.
 
     Parameters
     ----------
-    band : str
-        Band to process (default: 'r')
+    bands : str
+        Bands to process (e.g., 'r' or 'griz'). Stars from all bands are combined.
     zernikeKey : str
         Zernike coefficient to bin by (e.g., 'z4', 'z5', ...)
     detector : int
@@ -215,9 +226,11 @@ def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
         Size of star stamps in pixels
     max_visits_per_bin : int, optional
         Maximum visits to process per bin (for testing)
+    bin_idx : int, optional
+        If specified, process only this bin index. If None, process all bins.
     """
 
-    print(f"Computing average PSF vs {zernikeKey} for {band}-band, detector {detector}")
+    print(f"Computing average PSF vs {zernikeKey} for bands '{bands}', detector {detector}")
 
     # Initialize butler
     butler = Butler(repoButler, collections=collectionButler)
@@ -236,21 +249,39 @@ def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
     with open(dicZernike, 'rb') as f:
         zernike_table = pickle.load(f)
 
-    # Build Zernike dictionary for this band
+    # Build Zernike dictionary for specified bands (combined)
     zernikeDic = {}
     for visit in zernike_table:
-        if visit in visitsDP2 and zernike_table[visit]['band'] == band:
+        if visit in visitsDP2 and zernike_table[visit]['band'] in bands:
             if visit not in zernikeDic:
-                zernikeDic[visit] = zernike_table[visit][zernikeKey]
+                zernikeDic[visit] = {
+                    'zernike': zernike_table[visit][zernikeKey],
+                    'band': zernike_table[visit]['band'],
+                }
 
     # Get all Zernike values for histogram
-    z_all = [np.median(zernikeDic[visit]) for visit in zernikeDic]
-    print(f"  Found {len(zernikeDic)} visits in {band}-band")
+    z_all = [np.median(zernikeDic[visit]['zernike']) for visit in zernikeDic]
+    print(f"  Found {len(zernikeDic)} visits in bands '{bands}'")
+    print(f"  Zernike range: [{np.min(z_all):.3f}, {np.max(z_all):.3f}]")
 
-    # Get binning
-    z_central, half_bin_size = get_zernike_binning(zernikeKey)
+    # Get binning (auto-range from data)
+    z_central, half_bin_size = get_zernike_binning(zernikeKey, z_all)
     z_min_arr = z_central - half_bin_size
     z_max_arr = z_central + half_bin_size
+    n_bins = len(z_central)
+
+    print(f"  Number of bins: {n_bins}")
+    print(f"  Half bin size: {half_bin_size}")
+
+    # If bin_idx not specified, just print info and process all
+    if bin_idx is None:
+        print(f"\n  To process a single bin, use --bin_idx N where N is 0 to {n_bins - 1}")
+        bins_to_process = range(n_bins)
+    else:
+        if bin_idx < 0 or bin_idx >= n_bins:
+            raise ValueError(f"bin_idx {bin_idx} out of range [0, {n_bins - 1}]")
+        bins_to_process = [bin_idx]
+        print(f"  Processing only bin {bin_idx}")
 
     # Create output directories
     os.makedirs(repOutPlot, exist_ok=True)
@@ -258,22 +289,26 @@ def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
 
     # Results storage
     all_results = {
-        'band': band,
+        'bands': bands,
         'zernikeKey': zernikeKey,
         'detector': detector,
         'stampSize': stampSize,
+        'n_bins': n_bins,
+        'half_bin_size': half_bin_size,
         'bins': [],
     }
 
     # Loop over Zernike bins
-    for bin_idx, (z_min, z_max) in enumerate(zip(z_min_arr, z_max_arr)):
-        print(f"\nBin {bin_idx}: {zernikeKey} in [{z_min:.3f}, {z_max:.3f}]")
+    for idx in bins_to_process:
+        z_min = z_min_arr[idx]
+        z_max = z_max_arr[idx]
+        print(f"\nBin {idx}: {zernikeKey} in [{z_min:.3f}, {z_max:.3f}]")
 
         # Find visits in this bin
         visits_in_bin = []
         z_values_in_bin = []
         for visit in zernikeDic:
-            z_med = np.median(zernikeDic[visit])
+            z_med = np.median(zernikeDic[visit]['zernike'])
             if z_min < z_med < z_max:
                 if visit in visit_mapping:
                     visits_in_bin.append(visit)
@@ -314,6 +349,7 @@ def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
 
         # Store results
         bin_result = {
+            'bin_idx': idx,
             'z_min': z_min,
             'z_max': z_max,
             'z_median': z_median,
@@ -324,12 +360,15 @@ def avgPSF_vs_Zernike(band='r', zernikeKey='z4', detector=DEFAULT_DETECTOR,
         all_results['bins'].append(bin_result)
 
         # Plot
-        output_plot = os.path.join(repOutPlot, f'avgPSF_{zernikeKey}_bin{bin_idx:02d}_{band}_det{detector}.png')
+        output_plot = os.path.join(repOutPlot, f'avgPSF_{zernikeKey}_bin{idx:02d}_{bands}_det{detector}.png')
         plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey,
-                         len(all_stars), output_plot, bin_idx)
+                         len(all_stars), output_plot, idx, bands)
 
-    # Save all results
-    output_pkl = os.path.join(repOutFile, f'avgPSF_vs_{zernikeKey}_{band}_det{detector}.pkl')
+    # Save results
+    if bin_idx is not None:
+        output_pkl = os.path.join(repOutFile, f'avgPSF_vs_{zernikeKey}_{bands}_det{detector}_bin{bin_idx:02d}.pkl')
+    else:
+        output_pkl = os.path.join(repOutFile, f'avgPSF_vs_{zernikeKey}_{bands}_det{detector}.pkl')
     with open(output_pkl, 'wb') as f:
         pickle.dump(all_results, f)
     print(f"\nSaved results: {output_pkl}")
@@ -343,10 +382,14 @@ def main():
     defaultRepOutFile = "/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/"
 
     parser = argparse.ArgumentParser(description="Average PSF as function of Zernike coefficient")
-    parser.add_argument('--band', type=str, default='r', help="Band to process (default: r)")
-    parser.add_argument('--zernikeKey', type=str, default='z4', help="Zernike coefficient (default: z4)")
+    parser.add_argument('--band', type=str, default='r',
+                        help="Band(s) to process, e.g. 'r' or 'griz' (default: r)")
+    parser.add_argument('--zernikeKey', type=str, default='z4',
+                        help="Zernike coefficient (default: z4)")
     parser.add_argument('--detector', type=int, default=DEFAULT_DETECTOR,
                         help=f"Detector ID (default: {DEFAULT_DETECTOR})")
+    parser.add_argument('--bin_idx', type=int, default=None,
+                        help="Process only this bin index (default: all bins)")
     parser.add_argument('--visitMappingFile', type=str, default=defaultVisitMappingFile,
                         help="Path to visit_parquet_mapping.pkl")
     parser.add_argument('--dicZernike', type=str, default=defaultDicZernike,
@@ -366,7 +409,7 @@ def main():
     args = parser.parse_args()
 
     avgPSF_vs_Zernike(
-        band=args.band,
+        bands=args.band,
         zernikeKey=args.zernikeKey,
         detector=args.detector,
         visitMappingFile=args.visitMappingFile,
@@ -377,6 +420,7 @@ def main():
         repOutFile=args.repOutFile,
         stampSize=args.stampSize,
         max_visits_per_bin=args.max_visits_per_bin,
+        bin_idx=args.bin_idx,
     )
 
 
