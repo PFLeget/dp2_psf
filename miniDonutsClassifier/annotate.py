@@ -33,6 +33,8 @@ class Annotator:
         # Load or create annotations CSV
         if os.path.exists(output_csv):
             self.df = pd.read_csv(output_csv)
+            # Convert annotation column to numeric (handles empty strings as NaN)
+            self.df["annotation"] = pd.to_numeric(self.df["annotation"], errors='coerce')
             print(f"Loaded {len(self.df)} existing annotations")
         else:
             # Parse all image filenames to build initial dataframe
@@ -73,8 +75,20 @@ class Annotator:
         return unannotated.index[0]
 
     def save(self):
-        """Save annotations to CSV."""
-        self.df.to_csv(self.output_csv, index=False)
+        """Save annotations to CSV with clean formatting."""
+        df_out = self.df.copy()
+        # Convert 0.0 -> 0, 1.0 -> 1, keep 0.5 as is, keep NaN as empty
+        def format_annotation(x):
+            if pd.isna(x):
+                return ""
+            elif x == 0:
+                return "0"
+            elif x == 1:
+                return "1"
+            else:
+                return str(x)
+        df_out["annotation"] = df_out["annotation"].apply(format_annotation)
+        df_out.to_csv(self.output_csv, index=False)
 
     def _show_image(self):
         """Display current image with info and shortcuts."""
