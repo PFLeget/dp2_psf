@@ -140,8 +140,8 @@ def process_detector(butler, visit, detector, annotation, rng):
 
         results = []
         for idx in indices:
-            x = psf_table['slot_Centroid_x'][idx]
-            y = psf_table['slot_Centroid_y'][idx]
+            x = psf_table['slot_Centroid_x'][int(idx)]
+            y = psf_table['slot_Centroid_y'][int(idx)]
 
             # Extract large stamp for shifting
             stamp_large = extract_star_stamp(calexp, x, y, STAMP_SIZE_LARGE)
@@ -225,6 +225,10 @@ def main():
                        help="Process only N detectors (for testing)")
     parser.add_argument("--display", action="store_true",
                        help="Display augmented samples (requires matplotlib)")
+    parser.add_argument("--chunk_id", type=int, default=None,
+                       help="Chunk ID for parallel processing (0-indexed)")
+    parser.add_argument("--n_chunks", type=int, default=None,
+                       help="Total number of chunks for parallel processing")
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -247,6 +251,18 @@ def main():
     if args.n_detectors is not None:
         df = df.head(args.n_detectors)
         print(f"  -> Limited to {len(df)} detectors for testing")
+
+    # Select chunk for parallel processing
+    if args.chunk_id is not None and args.n_chunks is not None:
+        chunk_size = len(df) // args.n_chunks
+        start_idx = args.chunk_id * chunk_size
+        if args.chunk_id == args.n_chunks - 1:
+            # Last chunk gets remainder
+            end_idx = len(df)
+        else:
+            end_idx = start_idx + chunk_size
+        df = df.iloc[start_idx:end_idx].copy()
+        print(f"  -> Chunk {args.chunk_id}/{args.n_chunks}: detectors {start_idx}-{end_idx-1} ({len(df)} total)")
 
     # Initialize Butler
     print(f"Connecting to Butler: {args.repoButler}")
