@@ -87,13 +87,17 @@ plt.show()
 # %% Cell 4: Print best metrics
 print("Best validation metrics:")
 for k, v in results['best_metrics'].items():
-    if k != 'confusion_matrix':
-        print(f"  {k}: {v:.4f}")
+    if k != 'confusion_matrix_3class':
+        if isinstance(v, float):
+            print(f"  {k}: {v:.4f}")
+        else:
+            print(f"  {k}: {v}")
 
-print("\nConfusion matrix:")
-cm = np.array(results['best_metrics']['confusion_matrix'])
-print(f"  TN={cm[0,0]}, FP={cm[0,1]}")
-print(f"  FN={cm[1,0]}, TP={cm[1,1]}")
+print("\n3-Class Confusion Matrix (true \\ pred):")
+print("              Good | Unsure | Bad")
+cm = np.array(results['best_metrics']['confusion_matrix_3class'])
+print(f"  True Good:  {cm[0,0]:4d} | {cm[0,1]:5d} | {cm[0,2]:4d}")
+print(f"  True Bad:   {cm[1,0]:4d} | {cm[1,1]:5d} | {cm[1,2]:4d}")
 
 # %% Cell 5: Print hyperparameters
 print("Hyperparameters used:")

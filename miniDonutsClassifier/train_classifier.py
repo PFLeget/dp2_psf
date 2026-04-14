@@ -156,24 +156,73 @@ class WeightedBCELoss(nn.Module):
         return bce
 
 
-def compute_metrics(y_true, y_pred_prob, threshold=0.5):
-    """Compute classification metrics."""
-    y_pred = (y_pred_prob >= threshold).astype(int)
-    # For metrics, treat unsure as positive (bad) since they're > 0
-    y_true_binary = (y_true >= threshold).astype(int)
+def compute_metrics(y_true, y_pred_prob, thresh_good=0.3, thresh_bad=0.7):
+    """
+    Compute classification metrics with 3-class predictions.
 
-    acc = np.mean(y_pred == y_true_binary)
-    precision = precision_score(y_true_binary, y_pred, zero_division=0)
-    recall = recall_score(y_true_binary, y_pred, zero_division=0)
-    f1 = f1_score(y_true_binary, y_pred, zero_division=0)
-    cm = confusion_matrix(y_true_binary, y_pred, labels=[0, 1])
+    Excludes true UNSURE samples (y=0.5) from metrics.
+
+    Prediction classes:
+    - Good: P < thresh_good (0.3)
+    - Unsure: thresh_good <= P <= thresh_bad
+    - Bad: P > thresh_bad (0.7)
+
+    For true good/bad labels, predicting unsure is a misclassification.
+    """
+    # Exclude true unsure samples from metrics
+    mask = (y_true == 0) | (y_true == 1)
+    y_true_filtered = y_true[mask].astype(int)
+    y_pred_prob_filtered = y_pred_prob[mask]
+
+    n_unsure_excluded = int(np.sum(~mask))
+
+    if len(y_true_filtered) == 0:
+        return {
+            'accuracy': 0.0,
+            'precision': 0.0,
+            'recall': 0.0,
+            'f1': 0.0,
+            'confusion_matrix_3class': np.zeros((2, 3), dtype=int),
+            'n_unsure_excluded': n_unsure_excluded,
+        }
+
+    # 3-class predictions: 0=good, 1=unsure, 2=bad
+    y_pred_3class = np.ones_like(y_pred_prob_filtered, dtype=int)  # default unsure
+    y_pred_3class[y_pred_prob_filtered < thresh_good] = 0  # good
+    y_pred_3class[y_pred_prob_filtered > thresh_bad] = 2   # bad
+
+    # Confusion matrix: rows=true (good=0, bad=1), cols=pred (good=0, unsure=1, bad=2)
+    cm_3class = np.zeros((2, 3), dtype=int)
+    for t in [0, 1]:
+        for p in [0, 1, 2]:
+            cm_3class[t, p] = np.sum((y_true_filtered == t) & (y_pred_3class == p))
+
+    # Accuracy: correct only if (true=0 AND pred=good) OR (true=1 AND pred=bad)
+    correct = ((y_true_filtered == 0) & (y_pred_3class == 0)) | \
+              ((y_true_filtered == 1) & (y_pred_3class == 2))
+    accuracy = np.mean(correct)
+
+    # Precision for bad: TP / (TP + FP) where pred=bad
+    # TP = true=1 AND pred=bad, FP = true=0 AND pred=bad
+    tp = cm_3class[1, 2]
+    fp = cm_3class[0, 2]
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+
+    # Recall for bad: TP / (TP + FN) where FN = true=1 AND pred!=bad
+    # FN = true=1 AND (pred=good OR pred=unsure)
+    fn = cm_3class[1, 0] + cm_3class[1, 1]
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+    # F1
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
-        'accuracy': acc,
+        'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
         'f1': f1,
-        'confusion_matrix': cm,
+        'confusion_matrix_3class': cm_3class,
+        'n_unsure_excluded': n_unsure_excluded,
     }
 
 
@@ -402,9 +451,12 @@ def train(data_path, output_path="psf_classifier.pt", epochs=50, batch_size=128,
                   f"prec={val_metrics['precision']:.4f} rec={val_metrics['recall']:.4f} f1={val_metrics['f1']:.4f}")
 
             # Print confusion matrix every 10 epochs
+            # Rows: true (good=0, bad=1), Cols: pred (good, unsure, bad)
             if (epoch + 1) % 10 == 0:
-                cm = val_metrics['confusion_matrix']
-                print(f"         Val Confusion Matrix: TN={cm[0,0]} FP={cm[0,1]} FN={cm[1,0]} TP={cm[1,1]}")
+                cm = val_metrics['confusion_matrix_3class']
+                print(f"         Val Confusion Matrix (true\\pred): good|unsure|bad")
+                print(f"           True Good: {cm[0,0]:4d} | {cm[0,1]:4d} | {cm[0,2]:4d}")
+                print(f"           True Bad:  {cm[1,0]:4d} | {cm[1,1]:4d} | {cm[1,2]:4d}")
 
         # Save history
         history.append({
