@@ -430,7 +430,7 @@ def train(data_path, output_path="psf_classifier.pt", epochs=50, batch_size=128,
         print(f"\nTraining with weights: good={weight_good}, unsure={weight_unsure}, bad={weight_bad}")
         print("=" * 100)
 
-    best_recall = 0
+    best_f1 = 0
     best_metrics = {}
     patience_counter = 0
     history = []
@@ -439,8 +439,8 @@ def train(data_path, output_path="psf_classifier.pt", epochs=50, batch_size=128,
         train_metrics = train_epoch(model, train_loader, criterion, optimizer, device)
         val_metrics = evaluate(model, val_loader, criterion, device)
 
-        # Update scheduler based on recall (we want to maximize recall)
-        scheduler.step(val_metrics['recall'])
+        # Update scheduler based on F1 (we want to maximize F1)
+        scheduler.step(val_metrics['f1'])
 
         # Log
         if verbose:
@@ -466,9 +466,9 @@ def train(data_path, output_path="psf_classifier.pt", epochs=50, batch_size=128,
             'lr': optimizer.param_groups[0]['lr'],
         })
 
-        # Check for best model (based on recall)
-        if val_metrics['recall'] > best_recall:
-            best_recall = val_metrics['recall']
+        # Check for best model (based on F1-score)
+        if val_metrics['f1'] > best_f1:
+            best_f1 = val_metrics['f1']
             best_metrics = val_metrics.copy()
             patience_counter = 0
 
@@ -483,7 +483,7 @@ def train(data_path, output_path="psf_classifier.pt", epochs=50, batch_size=128,
                 'hyperparams': hyperparams,
             }, output_path)
             if verbose:
-                print(f"         -> Saved best model (recall={val_metrics['recall']:.4f})")
+                print(f"         -> Saved best model (f1={val_metrics['f1']:.4f})")
         else:
             patience_counter += 1
 
@@ -496,7 +496,7 @@ def train(data_path, output_path="psf_classifier.pt", epochs=50, batch_size=128,
     if verbose:
         print("=" * 100)
         print(f"\nTraining complete!")
-        print(f"Best validation recall: {best_recall:.4f}")
+        print(f"Best validation F1: {best_f1:.4f}")
         print(f"Model saved to {output_path}")
 
     # Save training history with hyperparameters
