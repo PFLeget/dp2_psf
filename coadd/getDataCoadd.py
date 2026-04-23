@@ -19,7 +19,8 @@ def getDataCoadd(repOut='data/'):
     """
 
     repo = "dp2_prep"
-    collection = "LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage3"
+    #collection = "LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage3"
+    collection = "LSSTCam/runs/DRP/DP2/v30_0_6_rc1/DM-53881/stage3"
 
     butler = Butler(repo, collections=collection)
 
@@ -40,7 +41,7 @@ def getDataCoadd(repOut='data/'):
 
     # Save the mapping
     os.makedirs(repOut, exist_ok=True)
-    output_file = os.path.join(repOut, 'tract_parquet_mapping.pkl')
+    output_file = os.path.join(repOut, 'tract_parquet_mapping_v2.pkl')
     with open(output_file, 'wb') as f:
         pickle.dump(tract_mapping, f)
 

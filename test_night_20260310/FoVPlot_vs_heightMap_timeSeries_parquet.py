@@ -171,7 +171,7 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
 
     # Color scale settings
     if secondMomentKey in ['dT']:
-        MAX = 0.5
+        MAX = 0.05
         colorlabel = "T - <T> (pixel$^2$)"
     else:
         MAX = 0.05
@@ -254,7 +254,7 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
 
 
 def create_time_series_video(visitIds_file, parquet_dir, fitHeightMap,
-                              secondMomentKey='dT', bin_spacing=150,
+                              secondMomentKey='dT', bin_spacing=300,
                               repOutPlot='plots/', fps=5, max_visits=None):
     """Create time series video of height map correlation."""
 

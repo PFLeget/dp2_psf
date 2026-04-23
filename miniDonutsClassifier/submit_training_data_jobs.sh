@@ -28,7 +28,7 @@ for ((chunk_id=0; chunk_id<N_CHUNKS; chunk_id++)); do
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
-#SBATCH --partition=milano
+#SBATCH --partition=torino
 #SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

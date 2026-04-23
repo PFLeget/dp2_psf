@@ -36,12 +36,12 @@ for band in "${BANDS[@]}"; do
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
-#SBATCH --partition=milano
+#SBATCH --partition=torino
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --output=${LOG_DIR}/${JOB_NAME}_%j.out
 #SBATCH --error=${LOG_DIR}/${JOB_NAME}_%j.err
 

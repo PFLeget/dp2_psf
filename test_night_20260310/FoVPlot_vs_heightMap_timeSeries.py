@@ -242,8 +242,9 @@ def create_frame(visit, meanify, rho, height_data, psf_data, tableSLAC,
     ax3.set_ylabel('y (mm)', size=18)
     ax3.set_title(f"Visit {visit} | {secondMomentKey}", size=16)
     ax3.tick_params(labelsize=14)
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.seismic, norm=plt.Normalize(-MAX, MAX))
+    #sm = plt.cm.ScalarMappable(cmap=plt.cm.seismic, norm=plt.Normalize(-MAX, MAX))
     cb = fig.colorbar(sm, ax=ax3)
+    cb = fig.colorbar(ax=ax3)
     cb.set_label(colorlabel, size=18)
     cb.ax.tick_params(labelsize=14)
 

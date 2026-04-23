@@ -12,10 +12,10 @@ REP_OUT_PLOT="${SCRIPT_DIR}/plots/avgPSF"
 REP_OUT_FILE="${SCRIPT_DIR}/data"
 
 # Parameters - adjust these as needed
-BANDS="griz"
+BANDS="riz"
 ZERNIKE_KEY="z4"
 DETECTOR=94
-N_BINS=40  # Set this to the number of bins (run script once without --bin_idx to see)
+N_BINS=49  # Set this to the number of bins (run script once without --bin_idx to see)
 
 # Create output directories
 mkdir -p "${LOG_DIR}"

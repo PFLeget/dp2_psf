@@ -82,12 +82,12 @@ for ((i=0; i<NUM_JOBS; i++)); do
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
-#SBATCH --partition=milano
-#SBATCH --time=04:00:00
+#SBATCH --partition=torino
+#SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
 #SBATCH --output=${LOG_DIR}/${JOB_NAME}_%j.out
 #SBATCH --error=${LOG_DIR}/${JOB_NAME}_%j.err
 

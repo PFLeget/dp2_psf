@@ -20,6 +20,7 @@ import argparse
 
 from lsst.daf.butler import Butler
 import lsst.geom as geom
+import matplotlib.colors as colors
 
 
 # Default parameters
@@ -151,8 +152,16 @@ def plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey, n_sta
 
     # Left: averaged star image
     ax1 = axes[0]
+    VMIN = 1e-5
+    VMAX = 1e-1
+    stampSize = np.shape(mean_star)[0]
+    mean_star = mean_star.reshape(stampSize * stampSize)
+    Filtre = mean_star < 0
+    mean_star[Filtre] = 1e-10
+    mean_star = mean_star.reshape((stampSize, stampSize))
+    
     if mean_star is not None:
-        im = ax1.imshow(mean_star, cmap=plt.cm.Greys_r, vmin=0, vmax=np.max(mean_star),
+        im = ax1.imshow(mean_star, cmap=plt.cm.Greys_r, norm=colors.LogNorm(vmin=VMIN, vmax=VMAX),
                         origin='lower')
         plt.colorbar(im, ax=ax1, label='Normalized flux')
     else:
@@ -165,12 +174,12 @@ def plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey, n_sta
     ax2 = axes[1]
     # Auto binning for histogram
     z_range = np.max(z_all) - np.min(z_all)
-    binning = np.linspace(np.min(z_all) - 0.1 * z_range, np.max(z_all) + 0.1 * z_range, 50)
+    binning = np.linspace(-2, 2, 50)
 
-    ax2.hist(z_all, bins=binning, color='blue', alpha=0.7, edgecolor='black')
+    ax2.hist(z_all, bins=binning, color='blue', alpha=0.7)
     ylim = ax2.get_ylim()
     ax2.fill_betweenx(ylim, z_min, z_max, color='red', alpha=0.3, label='Current bin')
-    ax2.axvline(z_median, color='red', linestyle='--', linewidth=2, label=f'Median = {z_median:.3f}')
+    #ax2.axvline(z_median, color='red', linestyle='--', linewidth=2, label=f'Median = {z_median:.3f}')
     ax2.set_ylim(ylim)
 
     # Zernike label formatting
@@ -184,7 +193,7 @@ def plot_zernike_bin(mean_star, z_all, z_min, z_max, z_median, zernikeKey, n_sta
     ax2.legend(loc='upper right')
     ax2.set_title(f'Zernike distribution (bin {bin_idx})', fontsize=14)
 
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"  Saved: {output_file}")
 

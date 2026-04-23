@@ -9,3 +9,5 @@ data/*.pkl
 *.png
 *.py~
 .ipynb_checkpoints/
+
+miniDonutsClassifier/plotForAnnotation/
