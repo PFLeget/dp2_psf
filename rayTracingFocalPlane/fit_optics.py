@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python
 """
 Fit optical parameters from star second moments using batoid ray tracing.
@@ -368,7 +369,7 @@ def atmosphere_spot_diagram(mxx,myy,mxy, type = "Gauss"):
 class BatoidFitter:
     """Fitter for AOS DOFs using batoid ray tracing."""
 
-    def __init__(self, ref_telescope, param_names, options):
+    def __init__(self, ref_telescope, param_names, use_gauss_moments= False):
         for param in param_names:
             if param not in AOS_DOF_INDICES:
                 raise ValueError(f"{param} is not in AOS param list: {list(AOS_DOF_INDICES.keys())}")
@@ -377,7 +378,7 @@ class BatoidFitter:
         self.param_names = param_names
         self.n_extra_params = 3  # Atmospheric seeing: smxx, smyy, smxy
         self.to_fit = None
-        self.options = options
+        self.use_gauss_moments = use_gauss_moments
         self.band_for_fit = None
 
     def move_parts(self, what, shifts):
@@ -404,7 +405,7 @@ class BatoidFitter:
         ax = self.to_fit.ax.to_numpy()
         ay = self.to_fit.ay.to_numpy()
 
-        if self.options.use_gauss_moments:
+        if self.use_gauss_moments:
             atmos = atmosphere_spot_diagram(smxx,smyy,smxy)
             spots = launch_rays(offset_tel, self.band_for_fit, ax, ay,
                                 atmos, with_wcs=False, output_file=None)
@@ -684,7 +685,7 @@ def main():
     print(f"  Loaded {len(data)} CCDs")
 
     # Fit
-    fitter = BatoidFitter(telescope, args.params, args)
+    fitter = BatoidFitter(telescope, args.params, args.use_gauss_moments)
     params, cov_params = fitter.fit(data, band, seeing=[1.3, 1.3, 0],
                                      start=start_values, verbose=True)
 
@@ -706,9 +707,9 @@ def main():
         print(f"  {k}: {v}")
 
     # Save data with fitted moments
-    data['fmxx'] = data['mxx'] - residuals[0]
-    data['fmyy'] = data['myy'] - residuals[1]
-    data['fmxy'] = data['mxy'] - residuals[2]
+    data['fmxx'] = residuals[0] + data['mxx']
+    data['fmyy'] = residuals[1] + data['myy'] 
+    data['fmxy'] = residuals[2] + data['mxy']
     data.to_parquet(os.path.join(args.repOut, f'iq_fit_visit{args.visitID}.parquet'))
     print(f"Saved iq_fit_visit{args.visitID}.parquet")
 
