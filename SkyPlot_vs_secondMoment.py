@@ -206,15 +206,20 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         # Use meanify_healpix for sky coordinates
         meanifyHealpix = treegp.meanify_healpix(bin_spacing=bin_spacing)
 
+        n_skipped = 0
         for visit, info in tqdm(selected_visits, desc="Loop over visits to compute spatial average on sky:"):
             # Load data directly from parquet
-            data = load_visit_data(info['parquet_path'])
+            try:
+                data = load_visit_data(info['parquet_path'])
+            except polars.exceptions.ColumnNotFoundError as e:
+                n_skipped += 1
+                continue
 
             # Sky coordinates (RA, Dec) - convert from radians to degrees
             ra_deg = np.degrees(data['ra'])
             dec_deg = np.degrees(data['dec'])
 
-            # Initialize filter (already filtered to calib_psf_used in load_visit_data)
+            # Initialize filter
             filtering = np.ones(len(data["ra"]), dtype=bool)
 
             # Filter by psf_max_value if specified
@@ -234,6 +239,9 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
             coord = np.array([ra_deg, dec_deg]).T
 
             meanifyHealpix.add_field(coord[filtering], data[key_second_moment][filtering])
+
+        if n_skipped > 0:
+            print(f"Skipped {n_skipped} visits due to missing sky-coord columns")
 
         meanifyHealpix.meanify()
 
