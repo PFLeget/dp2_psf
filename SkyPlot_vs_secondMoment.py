@@ -82,18 +82,19 @@ def filter_crowded_regions(ra_deg, dec_deg, galactic_b_min=20., lmc_radius=10., 
     return mask
 
 
-# Columns to read from parquet files
+# Columns to read from parquet files (sky-coordinate moments in arcsec^2)
 PARQUET_COLUMNS = [
-    'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
-    'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
-    'coord_ra', 'coord_dec', 'slot_Centroid_x', 'slot_Centroid_y',
-    'detector', 'psf_max_value', 'calib_psf_reserved',
+    'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
+    'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
+    'coord_ra', 'coord_dec',
+    'detector', 'psf_max_value',
 ]
 
 
 def load_visit_data(parquet_path):
     """
     Load visit data from parquet file and compute derived columns.
+    Uses sky-coordinate moments (Iuu, Ivv, Iuv) in arcsec^2.
 
     Parameters
     ----------
@@ -108,44 +109,41 @@ def load_visit_data(parquet_path):
     # Read parquet file with polars (fast!)
     table = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
 
-    # Convert to numpy arrays
-    slot_Shape_xx = table['slot_Shape_xx'].to_numpy()
-    slot_Shape_yy = table['slot_Shape_yy'].to_numpy()
-    slot_Shape_xy = table['slot_Shape_xy'].to_numpy()
-    slot_PsfShape_xx = table['slot_PsfShape_xx'].to_numpy()
-    slot_PsfShape_yy = table['slot_PsfShape_yy'].to_numpy()
-    slot_PsfShape_xy = table['slot_PsfShape_xy'].to_numpy()
+    # Convert to numpy arrays (sky-coord moments in arcsec^2)
+    iuu_src = table['shape_Iuu'].to_numpy()
+    ivv_src = table['shape_Ivv'].to_numpy()
+    iuv_src = table['shape_Iuv'].to_numpy()
+    iuu_psf = table['psfShape_Iuu'].to_numpy()
+    ivv_psf = table['psfShape_Ivv'].to_numpy()
+    iuv_psf = table['psfShape_Iuv'].to_numpy()
 
     # Compute derived quantities
-    T_src = slot_Shape_xx + slot_Shape_yy
-    e1_src = (slot_Shape_xx - slot_Shape_yy) / T_src
-    e2_src = 2 * slot_Shape_xy / T_src
+    T_src = iuu_src + ivv_src
+    e1_src = (iuu_src - ivv_src) / T_src
+    e2_src = 2 * iuv_src / T_src
 
-    T_psf = slot_PsfShape_xx + slot_PsfShape_yy
-    e1_psf = (slot_PsfShape_xx - slot_PsfShape_yy) / T_psf
-    e2_psf = 2 * slot_PsfShape_xy / T_psf
+    T_psf = iuu_psf + ivv_psf
+    e1_psf = (iuu_psf - ivv_psf) / T_psf
+    e2_psf = 2 * iuv_psf / T_psf
 
     return {
-        'ixx_src': slot_Shape_xx,
-        'iyy_src': slot_Shape_yy,
-        'ixy_src': slot_Shape_xy,
-        'ixx_psf': slot_PsfShape_xx,
-        'iyy_psf': slot_PsfShape_yy,
-        'ixy_psf': slot_PsfShape_xy,
+        'iuu_src': iuu_src,
+        'ivv_src': ivv_src,
+        'iuv_src': iuv_src,
+        'iuu_psf': iuu_psf,
+        'ivv_psf': ivv_psf,
+        'iuv_psf': iuv_psf,
         'dT_T': (T_src - T_psf) / T_src,
         'de1': e1_src - e1_psf,
         'de2': e2_src - e2_psf,
         'ra': table['coord_ra'].to_numpy(),
         'dec': table['coord_dec'].to_numpy(),
-        'xCCD': table['slot_Centroid_x'].to_numpy(),
-        'yCCD': table['slot_Centroid_y'].to_numpy(),
         'detector': table['detector'].to_numpy(),
         'psf_max_value': table['psf_max_value'].to_numpy(),
-        'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
     }
 
 
-def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mapping.pkl",
+def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mapping_skycoord.pkl",
                            repOutPlot='plots/',
                            key_second_moment='dT_T', bin_spacing=120, colorScale=0.005,
                            autoColorScale=False, autoColorScaleCst=2.,
@@ -216,8 +214,10 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
             ra_deg = np.degrees(data['ra'])
             dec_deg = np.degrees(data['dec'])
 
-            # Filter by psf_max_value if specified
+            # Initialize filter (already filtered to calib_psf_used in load_visit_data)
             filtering = np.ones(len(data["ra"]), dtype=bool)
+
+            # Filter by psf_max_value if specified
             if psf_max_value > 0:
                 filtering &= (data["psf_max_value"] > psf_max_value)
 

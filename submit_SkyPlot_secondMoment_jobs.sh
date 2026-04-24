@@ -8,7 +8,7 @@
 # Configuration
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf"
 SCRIPT_NAME="SkyPlot_vs_secondMoment.py"
-VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping.pkl"
+VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping_skycoord.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT_PLOT="${SCRIPT_DIR}/plots"
 
