@@ -34,6 +34,62 @@ LMC_RA, LMC_DEC = 80.9, -69.8
 SMC_RA, SMC_DEC = 13.2, -72.8
 
 
+def load_des_y6_rho(pkl_file):
+    """
+    Load DES Y6 rho statistics from pkl file.
+
+    DES Y6 index mapping (from file_order):
+    - rho1 = index 14 (q2cat_q2cat)
+    - rho2 = index 2 (e2cat_q2cat)
+    - rho3 = index 26 (w22cat_w22cat)
+    - rho4 = index 16 (q2cat_w22cat)
+    - rho5 = index 4 (e2cat_w22cat)
+    - rho3alt: no DES equivalent
+
+    Returns dict with rho1, rho2, rho3, rho4, rho5 (not rho3alt)
+    """
+    with open(pkl_file, 'rb') as f:
+        des_data = pickle.load(f)
+
+    meanr = des_data['meanr']
+    xips = des_data['xips']
+    xip_errs = des_data['xip_errs']
+
+    des_rho = {}
+
+    des_rho['rho1'] = {
+        'meanr': meanr,
+        'xip': xips[14],
+        'varxip': xip_errs[14]**2,
+    }
+
+    des_rho['rho2'] = {
+        'meanr': meanr,
+        'xip': xips[2],
+        'varxip': xip_errs[2]**2,
+    }
+
+    des_rho['rho3'] = {
+        'meanr': meanr,
+        'xip': xips[26],
+        'varxip': xip_errs[26]**2,
+    }
+
+    des_rho['rho4'] = {
+        'meanr': meanr,
+        'xip': xips[16],
+        'varxip': xip_errs[16]**2,
+    }
+
+    des_rho['rho5'] = {
+        'meanr': meanr,
+        'xip': xips[4],
+        'varxip': xip_errs[4]**2,
+    }
+
+    return des_rho
+
+
 def filter_crowded_regions(ra_deg, dec_deg, galactic_b_min=25., lmc_radius=10., smc_radius=5.):
     """
     Filter out stars in crowded regions: Milky Way plane, LMC, SMC.
@@ -260,7 +316,7 @@ def compute_rho_statistics(inputs, treecorr_config):
     return rho_stats
 
 
-def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
+def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=None):
     """
     Plot all rho statistics.
 
@@ -276,6 +332,8 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
         Y-axis limits per rho stat, e.g. {'rho1': 1e-6, 'rho2': 1e-7, 'rho3alt': (0, 1e-4)}
         For rho1-5: single value means symmetric [-val, val]
         For rho3alt: tuple (min, max)
+    des_rho : dict
+        DES Y6 rho statistics for comparison (from load_des_y6_rho). Contains rho1-5, not rho3alt.
     """
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
@@ -311,7 +369,14 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
             y = rho['xip']
             yerr = np.sqrt(rho['varxip'])
 
-        ax.errorbar(theta, y, yerr=yerr, fmt='o-', capsize=2, markersize=4)
+        ax.errorbar(theta, y, yerr=yerr, fmt='o-', capsize=2, markersize=4, label='DP2')
+
+        # Overlay DES Y6 if provided (not for rho3alt)
+        if des_rho is not None and rho_name in des_rho:
+            des = des_rho[rho_name]
+            ax.errorbar(des['meanr'], des['xip'], yerr=np.sqrt(des['varxip']),
+                        fmt='s--', capsize=2, markersize=4, alpha=0.7, color='C1', label='DES Y6 riz')
+
         ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
         ax.set_xscale('log')
         if rho_name != 'rho3alt':
@@ -326,6 +391,9 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
         ax.set_ylabel(rho_labels[rho_name])
         ax.grid(True, alpha=0.3)
 
+        if des_rho is not None and rho_name in des_rho:
+            ax.legend(loc='best', fontsize=8)
+
     if title:
         fig.suptitle(title, fontsize=14, fontweight='bold')
 
@@ -335,7 +403,7 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
     print(f"Saved plot: {output_file}")
 
 
-def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None):
+def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None, des_file=None):
     """Replot rho statistics from saved pkl file."""
     with open(pkl_file, 'rb') as f:
         data = pickle.load(f)
@@ -350,7 +418,11 @@ def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None):
         n_sources = data.get('n_sources', '?')
         title = f"Rho Statistics - {band}-band ({n_sources} sources)"
 
-    plot_rho_statistics(rho_stats, output_file, title=title, ylims=ylims)
+    des_rho = None
+    if des_file is not None:
+        des_rho = load_des_y6_rho(des_file)
+
+    plot_rho_statistics(rho_stats, output_file, title=title, ylims=ylims, des_rho=des_rho)
 
 
 def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None):
@@ -537,6 +609,8 @@ def main():
     parser.add_argument('--ylim_rho5', type=float, default=None, help='Y-axis limit for rho5 (symmetric)')
     parser.add_argument('--ylim_rho3alt', type=float, nargs=2, default=None,
                         help='Y-axis limits for rho3alt (min max, e.g. 0 1e-4)')
+    parser.add_argument('--desFile', type=str, default=None,
+                        help='Path to DES Y6 rho stats pkl file for comparison overlay')
 
     args = parser.parse_args()
 
@@ -556,7 +630,7 @@ def main():
             ylims['rho5'] = args.ylim_rho5
         if args.ylim_rho3alt is not None:
             ylims['rho3alt'] = tuple(args.ylim_rho3alt)
-        replot_from_pkl(args.pklInput, ylims=ylims if ylims else None)
+        replot_from_pkl(args.pklInput, ylims=ylims if ylims else None, des_file=args.desFile)
     elif args.mode == 'coadd':
         if args.tractMappingFile is None:
             raise ValueError("--tractMappingFile required for coadd mode")
