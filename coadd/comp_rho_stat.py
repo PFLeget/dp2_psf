@@ -260,8 +260,23 @@ def compute_rho_statistics(inputs, treecorr_config):
     return rho_stats
 
 
-def plot_rho_statistics(rho_stats, output_file, title=None):
-    """Plot all rho statistics."""
+def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
+    """
+    Plot all rho statistics.
+
+    Parameters
+    ----------
+    rho_stats : dict
+        Dict with rho1-5 and rho3alt, either treecorr objects or dicts with meanr/xip/varxip
+    output_file : str
+        Output filename
+    title : str
+        Plot title
+    ylims : dict
+        Y-axis limits per rho stat, e.g. {'rho1': 1e-6, 'rho2': 1e-7, 'rho3alt': (0, 1e-4)}
+        For rho1-5: single value means symmetric [-val, val]
+        For rho3alt: tuple (min, max)
+    """
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
     rho_labels = {
@@ -273,25 +288,40 @@ def plot_rho_statistics(rho_stats, output_file, title=None):
         'rho3alt': r"$\rho'_{3}(\theta) = \langle \frac{\delta T}{T}, \frac{\delta T}{T}\rangle$",
     }
 
+    if ylims is None:
+        ylims = {}
+
     plot_order = ['rho1', 'rho2', 'rho3', 'rho4', 'rho5', 'rho3alt']
 
     for idx, rho_name in enumerate(plot_order):
         ax = axes.flat[idx]
         rho = rho_stats[rho_name]
 
-        theta = rho.meanr  # arcmin
-        if rho_name == 'rho3alt':
-            y = rho.xi
-            yerr = np.sqrt(rho.varxi)
+        # Handle both treecorr objects and dicts from pkl
+        if hasattr(rho, 'meanr'):
+            theta = rho.meanr
+            if rho_name == 'rho3alt':
+                y = rho.xi
+                yerr = np.sqrt(rho.varxi)
+            else:
+                y = rho.xip
+                yerr = np.sqrt(rho.varxip)
         else:
-            y = rho.xip
-            yerr = np.sqrt(rho.varxip)
+            theta = rho['meanr']
+            y = rho['xip']
+            yerr = np.sqrt(rho['varxip'])
 
         ax.errorbar(theta, y, yerr=yerr, fmt='o-', capsize=2, markersize=4)
         ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
         ax.set_xscale('log')
         if rho_name != 'rho3alt':
             ax.set_yscale('symlog', linthresh=1e-8)
+            if rho_name in ylims:
+                val = ylims[rho_name]
+                ax.set_ylim(-val, val)
+        else:
+            if rho_name in ylims:
+                ax.set_ylim(ylims[rho_name])
         ax.set_xlabel('Separation [arcmin]')
         ax.set_ylabel(rho_labels[rho_name])
         ax.grid(True, alpha=0.3)
@@ -303,6 +333,24 @@ def plot_rho_statistics(rho_stats, output_file, title=None):
     plt.savefig(output_file, dpi=150)
     plt.close()
     print(f"Saved plot: {output_file}")
+
+
+def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None):
+    """Replot rho statistics from saved pkl file."""
+    with open(pkl_file, 'rb') as f:
+        data = pickle.load(f)
+
+    rho_stats = data['rho_stats']
+
+    if output_file is None:
+        output_file = pkl_file.replace('.pkl', '.png')
+
+    if title is None:
+        band = data.get('band', '?')
+        n_sources = data.get('n_sources', '?')
+        title = f"Rho Statistics - {band}-band ({n_sources} sources)"
+
+    plot_rho_statistics(rho_stats, output_file, title=title, ylims=ylims)
 
 
 def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None):
@@ -466,9 +514,9 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
 
 def main():
     parser = argparse.ArgumentParser(description="Compute Rho statistics for PSF modeling")
-    parser.add_argument('--mode', type=str, required=True, choices=['coadd', 'single_visit'],
-                        help='Data mode: coadd or single_visit')
-    parser.add_argument('--band', type=str, required=True, help='Band to process (u, g, r, i, z, y)')
+    parser.add_argument('--mode', type=str, required=True, choices=['coadd', 'single_visit', 'replot'],
+                        help='Data mode: coadd, single_visit, or replot')
+    parser.add_argument('--band', type=str, default=None, help='Band to process (u, g, r, i, z, y)')
     parser.add_argument('--tractMappingFile', type=str, default=None,
                         help='Path to tract_parquet_mapping.pkl (for coadd)')
     parser.add_argument('--visitMappingFile', type=str, default=None,
@@ -480,20 +528,50 @@ def main():
                         help='Do not exclude crowded regions')
     parser.add_argument('--max', type=int, default=None,
                         help='Maximum number of tracts/visits to process (for testing)')
+    parser.add_argument('--pklInput', type=str, default=None,
+                        help='Path to pkl file for replot mode')
+    parser.add_argument('--ylim_rho1', type=float, default=None, help='Y-axis limit for rho1 (symmetric)')
+    parser.add_argument('--ylim_rho2', type=float, default=None, help='Y-axis limit for rho2 (symmetric)')
+    parser.add_argument('--ylim_rho3', type=float, default=None, help='Y-axis limit for rho3 (symmetric)')
+    parser.add_argument('--ylim_rho4', type=float, default=None, help='Y-axis limit for rho4 (symmetric)')
+    parser.add_argument('--ylim_rho5', type=float, default=None, help='Y-axis limit for rho5 (symmetric)')
+    parser.add_argument('--ylim_rho3alt', type=float, nargs=2, default=None,
+                        help='Y-axis limits for rho3alt (min max, e.g. 0 1e-4)')
 
     args = parser.parse_args()
 
-    exclude_crowded = not args.no_exclude_crowded
-
-    if args.mode == 'coadd':
+    if args.mode == 'replot':
+        if args.pklInput is None:
+            raise ValueError("--pklInput required for replot mode")
+        ylims = {}
+        if args.ylim_rho1 is not None:
+            ylims['rho1'] = args.ylim_rho1
+        if args.ylim_rho2 is not None:
+            ylims['rho2'] = args.ylim_rho2
+        if args.ylim_rho3 is not None:
+            ylims['rho3'] = args.ylim_rho3
+        if args.ylim_rho4 is not None:
+            ylims['rho4'] = args.ylim_rho4
+        if args.ylim_rho5 is not None:
+            ylims['rho5'] = args.ylim_rho5
+        if args.ylim_rho3alt is not None:
+            ylims['rho3alt'] = tuple(args.ylim_rho3alt)
+        replot_from_pkl(args.pklInput, ylims=ylims if ylims else None)
+    elif args.mode == 'coadd':
         if args.tractMappingFile is None:
             raise ValueError("--tractMappingFile required for coadd mode")
+        if args.band is None:
+            raise ValueError("--band required for coadd mode")
+        exclude_crowded = not args.no_exclude_crowded
         run_coadd(args.band, args.tractMappingFile, args.repOut,
                   exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
                   max_tracts=args.max)
     else:
         if args.visitMappingFile is None:
             raise ValueError("--visitMappingFile required for single_visit mode")
+        if args.band is None:
+            raise ValueError("--band required for single_visit mode")
+        exclude_crowded = not args.no_exclude_crowded
         run_single_visit(args.band, args.visitMappingFile, args.repOut,
                          exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
                          max_visits=args.max)
