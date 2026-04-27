@@ -23,28 +23,35 @@ for pkl_file in ${PKL_DIR}/*.pkl; do
 
     filename=$(basename "$pkl_file")
 
-    # Extract band from filename (e.g., dT_T_sky_r_3600_0.pkl -> r)
-    # Pattern: {moment}_sky_{band}_{binspacing}_{psfmax}.pkl
-    band=$(echo "$filename" | sed -n 's/.*_sky_\([a-z]*\)_.*/\1/p')
-
-    # Determine color scale based on moment type
-    if [[ "$filename" == de1* ]] || [[ "$filename" == de2* ]]; then
-        COLOR_SCALE=${COLOR_SCALE_ELLIPTICITY}
-        moment_type="ellipticity"
-    elif [[ "$filename" == dT_T* ]]; then
-        COLOR_SCALE=${COLOR_SCALE_SIZE}
-        moment_type="size"
-    else
-        echo "Skipping unknown moment type: $filename"
+    # Skip coadd files
+    if [[ "$filename" == coadd_* ]]; then
         continue
     fi
 
-    echo "Replotting: $filename (${moment_type}, colorScale=${COLOR_SCALE})"
+    # Extract band from filename (e.g., dT_T_sky_r_3600_0.pkl -> r)
+    # Pattern: {moment}_sky_{band}_{binspacing}_{psfmax}.pkl
+    band=$(echo "$filename" | sed -n 's/.*_sky_\([a-zA-Z]*\)_.*/\1/p')
+
+    # Extract moment from filename (everything before _sky_)
+    moment=$(echo "$filename" | sed -n 's/\(.*\)_sky_.*/\1/p')
+
+    # Determine color scale based on moment type
+    if [[ "$moment" == "de1" ]] || [[ "$moment" == "de2" ]]; then
+        COLOR_SCALE=${COLOR_SCALE_ELLIPTICITY}
+    elif [[ "$moment" == "dT_T" ]]; then
+        COLOR_SCALE=${COLOR_SCALE_SIZE}
+    else
+        echo "Skipping unknown moment type: $filename (moment=$moment)"
+        continue
+    fi
+
+    echo "Replotting: $filename (moment=${moment}, band=${band}, colorScale=${COLOR_SCALE})"
 
     python ${SCRIPT_DIR}/SkyPlot_vs_secondMoment.py \
         --bands ${band} \
         --visitMappingFile "${VISIT_MAPPING_FILE}" \
         --pklInput "$pkl_file" \
+        --key_second_moment ${moment} \
         --colorScale ${COLOR_SCALE} \
         --repOutPlot "${PKL_DIR}"
 
