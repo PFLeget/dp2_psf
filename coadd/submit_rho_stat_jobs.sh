@@ -16,23 +16,28 @@ REP_OUT="${SCRIPT_DIR}/rho_stats"
 # Bands to process
 BANDS=("u" "g" "r" "i" "z" "y")
 
+# Ellipticity types to process
+ELLIPTICITY_TYPES=("distortion" "shear")
+
 # Create output directories
 mkdir -p "${LOG_DIR}"
 mkdir -p "${REP_OUT}"
 
 echo "Submitting Rho statistics jobs for bands: ${BANDS[*]}"
+echo "Ellipticity types: ${ELLIPTICITY_TYPES[*]}"
 echo "=================================================="
 
 JOB_COUNT=0
 
 for BAND in "${BANDS[@]}"; do
-    echo ""
-    echo "Band: ${BAND}"
-    echo "--------------------------------------------------"
+    for ETYPE in "${ELLIPTICITY_TYPES[@]}"; do
+        echo ""
+        echo "Band: ${BAND}, Ellipticity: ${ETYPE}"
+        echo "--------------------------------------------------"
 
-    # Job: Coadd
-    JOB_NAME="rho_coadd_${BAND}"
-    sbatch <<EOF
+        # Job: Coadd
+        JOB_NAME="rho_coadd_${BAND}_${ETYPE}"
+        sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
@@ -51,7 +56,7 @@ setup lsst_distrib -t d_latest
 
 cd ${SCRIPT_DIR}
 
-echo "Starting Rho statistics: COADD ${BAND}-band"
+echo "Starting Rho statistics: COADD ${BAND}-band (${ETYPE})"
 echo "Time: \$(date)"
 echo "Node: \$(hostname)"
 echo "=================================================="
@@ -61,18 +66,19 @@ python ${SCRIPT_NAME} \\
     --band ${BAND} \\
     --tractMappingFile "${TRACT_MAPPING_FILE}" \\
     --repOut "${REP_OUT}" \\
-    --galactic_b_min 25.
+    --galactic_b_min 25. \\
+    --ellipticityType ${ETYPE}
 
 echo "=================================================="
 echo "Job completed at: \$(date)"
 EOF
 
-    echo "  Submitted: ${JOB_NAME}"
-    ((JOB_COUNT++))
+        echo "  Submitted: ${JOB_NAME}"
+        ((JOB_COUNT++))
 
-    # Job: Single Visit
-    JOB_NAME="rho_single_${BAND}"
-    sbatch <<EOF
+        # Job: Single Visit
+        JOB_NAME="rho_single_${BAND}_${ETYPE}"
+        sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
@@ -91,7 +97,7 @@ setup lsst_distrib -t d_latest
 
 cd ${SCRIPT_DIR}
 
-echo "Starting Rho statistics: SINGLE VISIT ${BAND}-band"
+echo "Starting Rho statistics: SINGLE VISIT ${BAND}-band (${ETYPE})"
 echo "Time: \$(date)"
 echo "Node: \$(hostname)"
 echo "=================================================="
@@ -102,15 +108,17 @@ python ${SCRIPT_NAME} \\
     --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --repOut "${REP_OUT}" \\
     --galactic_b_min 25. \\
-    --coaddDetectorFile "${COADD_DETECTOR_FILE}"
+    --coaddDetectorFile "${COADD_DETECTOR_FILE}" \\
+    --ellipticityType ${ETYPE}
 
 echo "=================================================="
 echo "Job completed at: \$(date)"
 EOF
 
-    echo "  Submitted: ${JOB_NAME}"
-    ((JOB_COUNT++))
+        echo "  Submitted: ${JOB_NAME}"
+        ((JOB_COUNT++))
 
+    done
 done
 
 echo "=================================================="

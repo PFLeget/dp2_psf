@@ -470,9 +470,9 @@ def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None, des_file
 
 
 def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None,
-              npatch=100, patch_centers=None):
+              npatch=100, patch_centers=None, ellipticity_type='distortion'):
     """Run rho statistics on coadd data."""
-    print(f"Computing rho statistics for COADD, band={band}")
+    print(f"Computing rho statistics for COADD, band={band}, ellipticity_type={ellipticity_type}")
 
     with open(tractMappingFile, 'rb') as f:
         tract_mapping = pickle.load(f)
@@ -515,7 +515,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     print(f"  After NaN filter: {len(all_data['ra'])}")
 
     # Compute rho inputs
-    inputs = compute_rho_inputs(all_data)
+    inputs = compute_rho_inputs(all_data, ellipticity_type=ellipticity_type)
 
     # Treecorr config - match DES Y6 binning
     treecorr_config = {
@@ -525,9 +525,12 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
         'nbins': 37,
     }
 
+    # Build suffix for output files
+    suffix = f'coadd_{band}_{ellipticity_type}'
+
     # Compute rho stats with consistent patch centers
     os.makedirs(repOut, exist_ok=True)
-    patch_centers_file = os.path.join(repOut, f'patch_centers_coadd_{band}.txt')
+    patch_centers_file = os.path.join(repOut, f'patch_centers_{suffix}.txt')
     rho_stats, patch_centers_out = compute_rho_statistics(
         inputs, treecorr_config,
         npatch=npatch, patch_centers=patch_centers,
@@ -535,7 +538,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     )
 
     # Save treecorr Corr2 results using TreeCorr's write method
-    treecorr_dir = os.path.join(repOut, f'treecorr_coadd_{band}')
+    treecorr_dir = os.path.join(repOut, f'treecorr_{suffix}')
     os.makedirs(treecorr_dir, exist_ok=True)
     for rho_name, rho_corr in rho_stats.items():
         output_file = os.path.join(treecorr_dir, f'{rho_name}.fits')
@@ -543,7 +546,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     print(f"Saved TreeCorr Corr2 files: {treecorr_dir}/")
 
     # Save summary results (for plotting)
-    output_pkl = os.path.join(repOut, f'rho_stats_coadd_{band}.pkl')
+    output_pkl = os.path.join(repOut, f'rho_stats_{suffix}.pkl')
     with open(output_pkl, 'wb') as f:
         pickle.dump({
             'rho_stats': {k: {'meanr': v.meanr, 'xip': v.xip if hasattr(v, 'xip') else v.xi,
@@ -554,18 +557,19 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
             'n_sources': len(inputs['ra']),
             'treecorr_config': treecorr_config,
             'patch_centers_file': patch_centers_file,
+            'ellipticity_type': ellipticity_type,
         }, f)
     print(f"Saved summary: {output_pkl}")
 
     # Plot
-    output_plot = os.path.join(repOut, f'rho_stats_coadd_{band}.png')
-    plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Coadd {band}-band")
+    output_plot = os.path.join(repOut, f'rho_stats_{suffix}.png')
+    plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Coadd {band}-band ({ellipticity_type})")
 
 
 def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None,
-                     npatch=100, patch_centers=None, coaddDetectorFile=None):
+                     npatch=100, patch_centers=None, coaddDetectorFile=None, ellipticity_type='distortion'):
     """Run rho statistics on single visit data."""
-    print(f"Computing rho statistics for SINGLE VISIT, band={band}")
+    print(f"Computing rho statistics for SINGLE VISIT, band={band}, ellipticity_type={ellipticity_type}")
 
     with open(visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
@@ -629,7 +633,7 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
     print(f"  After NaN filter: {len(all_data['ra'])}")
 
     # Compute rho inputs
-    inputs = compute_rho_inputs(all_data)
+    inputs = compute_rho_inputs(all_data, ellipticity_type=ellipticity_type)
 
     # Treecorr config - match DES Y6 binning
     treecorr_config = {
@@ -640,7 +644,7 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
     }
 
     # Build suffix for output files
-    suffix = f'single_visit_{band}'
+    suffix = f'single_visit_{band}_{ellipticity_type}'
     if coaddDetectorFile is not None:
         suffix += '_coaddOnly'
 
@@ -675,11 +679,12 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
             'treecorr_config': treecorr_config,
             'patch_centers_file': patch_centers_file,
             'coadd_only': coaddDetectorFile is not None,
+            'ellipticity_type': ellipticity_type,
         }, f)
     print(f"Saved summary: {output_pkl}")
 
     # Plot
-    title = f"Rho Statistics - Single Visit {band}-band"
+    title = f"Rho Statistics - Single Visit {band}-band ({ellipticity_type})"
     if coaddDetectorFile is not None:
         title += " (coadd detectors only)"
     output_plot = os.path.join(repOut, f'rho_stats_{suffix}.png')
@@ -719,6 +724,8 @@ def main():
                         help='Path to patch centers file (for consistent patches across runs)')
     parser.add_argument('--coaddDetectorFile', type=str, default=None,
                         help='Path to coadd_detector_mapping.pkl to filter only detectors in coadd (single_visit mode)')
+    parser.add_argument('--ellipticityType', type=str, default='distortion', choices=['distortion', 'shear'],
+                        help='Ellipticity definition: distortion (default) or shear')
 
     args = parser.parse_args()
 
@@ -747,7 +754,8 @@ def main():
         exclude_crowded = not args.no_exclude_crowded
         run_coadd(args.band, args.tractMappingFile, args.repOut,
                   exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
-                  max_tracts=args.max, npatch=args.npatch, patch_centers=args.patchCenters)
+                  max_tracts=args.max, npatch=args.npatch, patch_centers=args.patchCenters,
+                  ellipticity_type=args.ellipticityType)
     else:
         if args.visitMappingFile is None:
             raise ValueError("--visitMappingFile required for single_visit mode")
@@ -757,7 +765,7 @@ def main():
         run_single_visit(args.band, args.visitMappingFile, args.repOut,
                          exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
                          max_visits=args.max, npatch=args.npatch, patch_centers=args.patchCenters,
-                         coaddDetectorFile=args.coaddDetectorFile)
+                         coaddDetectorFile=args.coaddDetectorFile, ellipticity_type=args.ellipticityType)
 
 
 if __name__ == "__main__":
