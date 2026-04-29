@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # SLURM job submission script for comp_rho_stat.py
-# Submits jobs for r-band coadd and single visit rho statistics
+# Submits jobs for all bands (u, g, r, i, z, y) coadd and single visit rho statistics
 #
 
 # Configuration
@@ -13,18 +13,26 @@ COADD_DETECTOR_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT="${SCRIPT_DIR}/rho_stats"
 
+# Bands to process
+BANDS=("u" "g" "r" "i" "z" "y")
+
 # Create output directories
 mkdir -p "${LOG_DIR}"
 mkdir -p "${REP_OUT}"
 
-BAND="r"
-
-echo "Submitting Rho statistics jobs for ${BAND}-band..."
+echo "Submitting Rho statistics jobs for bands: ${BANDS[*]}"
 echo "=================================================="
 
-# Job 1: Coadd
-JOB_NAME="rho_coadd_${BAND}"
-sbatch <<EOF
+JOB_COUNT=0
+
+for BAND in "${BANDS[@]}"; do
+    echo ""
+    echo "Band: ${BAND}"
+    echo "--------------------------------------------------"
+
+    # Job: Coadd
+    JOB_NAME="rho_coadd_${BAND}"
+    sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
@@ -59,11 +67,12 @@ echo "=================================================="
 echo "Job completed at: \$(date)"
 EOF
 
-echo "Submitted: ${JOB_NAME}"
+    echo "  Submitted: ${JOB_NAME}"
+    ((JOB_COUNT++))
 
-# Job 2: Single Visit
-JOB_NAME="rho_single_${BAND}"
-sbatch <<EOF
+    # Job: Single Visit
+    JOB_NAME="rho_single_${BAND}"
+    sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=rubin:developers
@@ -99,9 +108,12 @@ echo "=================================================="
 echo "Job completed at: \$(date)"
 EOF
 
-echo "Submitted: ${JOB_NAME}"
+    echo "  Submitted: ${JOB_NAME}"
+    ((JOB_COUNT++))
+
+done
 
 echo "=================================================="
-echo "Total jobs submitted: 2"
+echo "Total jobs submitted: ${JOB_COUNT}"
 echo "Log files will be in: ${LOG_DIR}"
 echo "Results will be in: ${REP_OUT}"
