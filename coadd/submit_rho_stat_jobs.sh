@@ -9,6 +9,7 @@ SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/coadd"
 SCRIPT_NAME="comp_rho_stat.py"
 TRACT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/tract_parquet_mapping.pkl"
 VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping_skycoord.pkl"
+COADD_DETECTOR_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/coadd_detector_mapping.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT="${SCRIPT_DIR}/rho_stats"
 
@@ -91,7 +92,8 @@ python ${SCRIPT_NAME} \\
     --band ${BAND} \\
     --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --repOut "${REP_OUT}" \\
-    --galactic_b_min 25.
+    --galactic_b_min 25. \\
+    --coaddDetectorFile "${COADD_DETECTOR_FILE}"
 
 echo "=================================================="
 echo "Job completed at: \$(date)"
