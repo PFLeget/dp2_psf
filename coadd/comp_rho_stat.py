@@ -177,19 +177,33 @@ def load_coadd_data(parquet_path, band):
     }
 
 
-def load_single_visit_data(parquet_path):
-    """Load single visit data with sky coordinate moments."""
+def load_single_visit_data(parquet_path, coadd_detectors=None):
+    """Load single visit data with sky coordinate moments.
+
+    Parameters
+    ----------
+    parquet_path : str
+        Path to the parquet file
+    coadd_detectors : set or None
+        If provided, only keep sources from detectors in this set.
+    """
     columns = [
         'coord_ra', 'coord_dec',
         'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
         'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
         'calib_psf_used',
+        'detector',
     ]
 
     table = polars.scan_parquet(parquet_path).select(columns).collect()
 
     # Filter to PSF stars
     mask = table['calib_psf_used'].to_numpy() == True
+
+    # Filter by coadd detectors if specified
+    if coadd_detectors is not None:
+        detector_col = table['detector'].to_numpy()
+        mask &= np.isin(detector_col, list(coadd_detectors))
 
     return {
         'ixx': table['shape_Iuu'].to_numpy()[mask],  # arcsec^2
@@ -248,43 +262,33 @@ def compute_rho_inputs(data, ellipticity_type='distortion', size_type='trace'):
     }
 
 
-def corr_spin2(ra, dec, g1a, g2a, g1b=None, g2b=None, config=None):
-    """Compute spin-2 (shear-like) correlation."""
-    xy = treecorr.GGCorrelation(config=config)
-    catA = treecorr.Catalog(ra=ra, dec=dec, g1=g1a, g2=g2a,
-                            ra_units='deg', dec_units='deg', config=config)
-
-    if g1b is None or g2b is None:
-        xy.process(catA)
-    else:
-        catB = treecorr.Catalog(ra=ra, dec=dec, g1=g1b, g2=g2b,
-                                ra_units='deg', dec_units='deg', config=config,
-                                patch_centers=catA.patch_centers)
-        xy.process(catA, catB)
-    return xy
-
-
-def corr_spin0(ra, dec, k1, k2=None, config=None):
-    """Compute spin-0 (scalar) correlation."""
-    xy = treecorr.KKCorrelation(config=config)
-    catA = treecorr.Catalog(ra=ra, dec=dec, k=k1,
-                            ra_units='deg', dec_units='deg', config=config)
-
-    if k2 is None:
-        xy.process(catA)
-    else:
-        catB = treecorr.Catalog(ra=ra, dec=dec, k=k2,
-                                ra_units='deg', dec_units='deg', config=config,
-                                patch_centers=catA.patch_centers)
-        xy.process(catA, catB)
-    return xy
-
-
-def compute_rho_statistics(inputs, treecorr_config):
+def compute_rho_statistics(inputs, treecorr_config, npatch=100, patch_centers=None, patch_centers_file=None):
     """
-    Compute all rho statistics.
+    Compute all rho statistics with consistent patch centers for covariance estimation.
 
-    Returns dict with rho1, rho2, rho3, rho4, rho5, rho3alt
+    All catalogs use the same patch centers so that treecorr.estimate_multi_cov can
+    be used to combine their covariances.
+
+    Parameters
+    ----------
+    inputs : dict
+        Output from compute_rho_inputs
+    treecorr_config : dict
+        TreeCorr configuration (sep_units, min_sep, max_sep, nbins)
+    npatch : int
+        Number of patches for jackknife (used only if patch_centers not provided)
+    patch_centers : array or str
+        Pre-computed patch centers (array or path to file). If None, will be
+        computed from the data and optionally saved.
+    patch_centers_file : str
+        If provided and patch_centers is None, save computed patch centers here.
+
+    Returns
+    -------
+    rho_stats : dict
+        Dict with rho1-5 and rho3alt treecorr correlation objects
+    patch_centers : array
+        The patch centers used (for passing to subsequent calls)
     """
     ra = inputs['ra']
     dec = inputs['dec']
@@ -293,27 +297,67 @@ def compute_rho_statistics(inputs, treecorr_config):
     size_res = inputs['size_res']
     e1_size_res, e2_size_res = inputs['e1_size_res'], inputs['e2_size_res']
 
+    # Create the reference catalog to establish patch centers
+    print(f"  Creating reference catalog with {npatch} patches...")
+    if patch_centers is None:
+        cat_ref = treecorr.Catalog(ra=ra, dec=dec, g1=e1_res, g2=e2_res,
+                                   ra_units='deg', dec_units='deg',
+                                   npatch=npatch)
+        patch_centers = cat_ref.patch_centers
+        if patch_centers_file is not None:
+            cat_ref.write_patch_centers(patch_centers_file)
+            print(f"  Saved patch centers to: {patch_centers_file}")
+    else:
+        cat_ref = treecorr.Catalog(ra=ra, dec=dec, g1=e1_res, g2=e2_res,
+                                   ra_units='deg', dec_units='deg',
+                                   patch_centers=patch_centers)
+
+    # Build all catalogs with same patch centers
+    print("  Building catalogs with consistent patch centers...")
+    cat_e = treecorr.Catalog(ra=ra, dec=dec, g1=e1, g2=e2,
+                             ra_units='deg', dec_units='deg',
+                             patch_centers=patch_centers)
+    cat_de = cat_ref  # Already built with e1_res, e2_res
+    cat_eT = treecorr.Catalog(ra=ra, dec=dec, g1=e1_size_res, g2=e2_size_res,
+                              ra_units='deg', dec_units='deg',
+                              patch_centers=patch_centers)
+    cat_T = treecorr.Catalog(ra=ra, dec=dec, k=size_res,
+                             ra_units='deg', dec_units='deg',
+                             patch_centers=patch_centers)
+
     rho_stats = {}
 
     print("  Computing rho1: <de*, de>")
-    rho_stats['rho1'] = corr_spin2(ra, dec, e1_res, e2_res, config=treecorr_config)
+    rho1 = treecorr.GGCorrelation(config=treecorr_config)
+    rho1.process(cat_de)
+    rho_stats['rho1'] = rho1
 
     print("  Computing rho2: <e*, de>")
-    rho_stats['rho2'] = corr_spin2(ra, dec, e1, e2, e1_res, e2_res, config=treecorr_config)
+    rho2 = treecorr.GGCorrelation(config=treecorr_config)
+    rho2.process(cat_e, cat_de)
+    rho_stats['rho2'] = rho2
 
     print("  Computing rho3: <e*dT/T, e*dT/T>")
-    rho_stats['rho3'] = corr_spin2(ra, dec, e1_size_res, e2_size_res, config=treecorr_config)
+    rho3 = treecorr.GGCorrelation(config=treecorr_config)
+    rho3.process(cat_eT)
+    rho_stats['rho3'] = rho3
 
     print("  Computing rho4: <de*, e*dT/T>")
-    rho_stats['rho4'] = corr_spin2(ra, dec, e1_res, e2_res, e1_size_res, e2_size_res, config=treecorr_config)
+    rho4 = treecorr.GGCorrelation(config=treecorr_config)
+    rho4.process(cat_de, cat_eT)
+    rho_stats['rho4'] = rho4
 
     print("  Computing rho5: <e*, e*dT/T>")
-    rho_stats['rho5'] = corr_spin2(ra, dec, e1, e2, e1_size_res, e2_size_res, config=treecorr_config)
+    rho5 = treecorr.GGCorrelation(config=treecorr_config)
+    rho5.process(cat_e, cat_eT)
+    rho_stats['rho5'] = rho5
 
     print("  Computing rho3alt: <dT/T, dT/T>")
-    rho_stats['rho3alt'] = corr_spin0(ra, dec, size_res, config=treecorr_config)
+    rho3alt = treecorr.KKCorrelation(config=treecorr_config)
+    rho3alt.process(cat_T)
+    rho_stats['rho3alt'] = rho3alt
 
-    return rho_stats
+    return rho_stats, patch_centers
 
 
 def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=None):
@@ -425,7 +469,8 @@ def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None, des_file
     plot_rho_statistics(rho_stats, output_file, title=title, ylims=ylims, des_rho=des_rho)
 
 
-def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None):
+def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None,
+              npatch=100, patch_centers=None):
     """Run rho statistics on coadd data."""
     print(f"Computing rho statistics for COADD, band={band}")
 
@@ -472,19 +517,32 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     # Compute rho inputs
     inputs = compute_rho_inputs(all_data)
 
-    # Treecorr config
+    # Treecorr config - match DES Y6 binning
     treecorr_config = {
         'sep_units': 'arcmin',
-        'min_sep': 0.5,
-        'max_sep': 100.0,
-        'nbins': 20,
+        'min_sep': 0.28,
+        'max_sep': 900.0,
+        'nbins': 37,
     }
 
-    # Compute rho stats
-    rho_stats = compute_rho_statistics(inputs, treecorr_config)
-
-    # Save results
+    # Compute rho stats with consistent patch centers
     os.makedirs(repOut, exist_ok=True)
+    patch_centers_file = os.path.join(repOut, f'patch_centers_coadd_{band}.txt')
+    rho_stats, patch_centers_out = compute_rho_statistics(
+        inputs, treecorr_config,
+        npatch=npatch, patch_centers=patch_centers,
+        patch_centers_file=patch_centers_file if patch_centers is None else None
+    )
+
+    # Save treecorr Corr2 results using TreeCorr's write method
+    treecorr_dir = os.path.join(repOut, f'treecorr_coadd_{band}')
+    os.makedirs(treecorr_dir, exist_ok=True)
+    for rho_name, rho_corr in rho_stats.items():
+        output_file = os.path.join(treecorr_dir, f'{rho_name}.fits')
+        rho_corr.write(output_file)
+    print(f"Saved TreeCorr Corr2 files: {treecorr_dir}/")
+
+    # Save summary results (for plotting)
     output_pkl = os.path.join(repOut, f'rho_stats_coadd_{band}.pkl')
     with open(output_pkl, 'wb') as f:
         pickle.dump({
@@ -495,20 +553,29 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
             'band': band,
             'n_sources': len(inputs['ra']),
             'treecorr_config': treecorr_config,
+            'patch_centers_file': patch_centers_file,
         }, f)
-    print(f"Saved: {output_pkl}")
+    print(f"Saved summary: {output_pkl}")
 
     # Plot
     output_plot = os.path.join(repOut, f'rho_stats_coadd_{band}.png')
     plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Coadd {band}-band")
 
 
-def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None):
+def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None,
+                     npatch=100, patch_centers=None, coaddDetectorFile=None):
     """Run rho statistics on single visit data."""
     print(f"Computing rho statistics for SINGLE VISIT, band={band}")
 
     with open(visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
+
+    # Load coadd detector mapping if specified
+    coadd_detector_mapping = None
+    if coaddDetectorFile is not None:
+        with open(coaddDetectorFile, 'rb') as f:
+            coadd_detector_mapping = pickle.load(f)
+        print(f"  Loaded coadd detector mapping: {len(coadd_detector_mapping)} visits")
 
     # Filter by band
     selected_visits = [(v, info) for v, info in visit_mapping.items() if info['band'] == band]
@@ -521,13 +588,25 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
 
     all_data = {k: [] for k in ['ixx', 'iyy', 'ixy', 'ixx_psf', 'iyy_psf', 'ixy_psf', 'ra', 'dec']}
 
+    n_skipped_no_coadd = 0
     for visit, info in tqdm(selected_visits, desc="Loading visits"):
+        # Get coadd detectors for this visit (if filtering enabled)
+        coadd_detectors = None
+        if coadd_detector_mapping is not None:
+            if visit not in coadd_detector_mapping:
+                n_skipped_no_coadd += 1
+                continue
+            coadd_detectors = coadd_detector_mapping[visit]
+
         try:
-            data = load_single_visit_data(info['parquet_path'])
+            data = load_single_visit_data(info['parquet_path'], coadd_detectors=coadd_detectors)
             for k in all_data:
                 all_data[k].append(data[k])
         except Exception as e:
             print(f"  Warning: failed visit {visit}: {e}")
+
+    if n_skipped_no_coadd > 0:
+        print(f"  Skipped {n_skipped_no_coadd} visits not in coadd")
 
     # Concatenate
     for k in all_data:
@@ -552,20 +631,38 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
     # Compute rho inputs
     inputs = compute_rho_inputs(all_data)
 
-    # Treecorr config
+    # Treecorr config - match DES Y6 binning
     treecorr_config = {
         'sep_units': 'arcmin',
-        'min_sep': 0.5,
-        'max_sep': 100.0,
-        'nbins': 20,
+        'min_sep': 0.28,
+        'max_sep': 900.0,
+        'nbins': 37,
     }
 
-    # Compute rho stats
-    rho_stats = compute_rho_statistics(inputs, treecorr_config)
+    # Build suffix for output files
+    suffix = f'single_visit_{band}'
+    if coaddDetectorFile is not None:
+        suffix += '_coaddOnly'
 
-    # Save results
+    # Compute rho stats with consistent patch centers
     os.makedirs(repOut, exist_ok=True)
-    output_pkl = os.path.join(repOut, f'rho_stats_single_visit_{band}.pkl')
+    patch_centers_file = os.path.join(repOut, f'patch_centers_{suffix}.txt')
+    rho_stats, patch_centers_out = compute_rho_statistics(
+        inputs, treecorr_config,
+        npatch=npatch, patch_centers=patch_centers,
+        patch_centers_file=patch_centers_file if patch_centers is None else None
+    )
+
+    # Save treecorr Corr2 results using TreeCorr's write method
+    treecorr_dir = os.path.join(repOut, f'treecorr_{suffix}')
+    os.makedirs(treecorr_dir, exist_ok=True)
+    for rho_name, rho_corr in rho_stats.items():
+        output_file = os.path.join(treecorr_dir, f'{rho_name}.fits')
+        rho_corr.write(output_file)
+    print(f"Saved TreeCorr Corr2 files: {treecorr_dir}/")
+
+    # Save summary results (for plotting)
+    output_pkl = os.path.join(repOut, f'rho_stats_{suffix}.pkl')
     with open(output_pkl, 'wb') as f:
         pickle.dump({
             'rho_stats': {k: {'meanr': v.meanr, 'xip': v.xip if hasattr(v, 'xip') else v.xi,
@@ -574,14 +671,19 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
                          for k, v in rho_stats.items()},
             'band': band,
             'n_sources': len(inputs['ra']),
-            'n_visits': len(selected_visits),
+            'n_visits': len(selected_visits) - n_skipped_no_coadd,
             'treecorr_config': treecorr_config,
+            'patch_centers_file': patch_centers_file,
+            'coadd_only': coaddDetectorFile is not None,
         }, f)
-    print(f"Saved: {output_pkl}")
+    print(f"Saved summary: {output_pkl}")
 
     # Plot
-    output_plot = os.path.join(repOut, f'rho_stats_single_visit_{band}.png')
-    plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Single Visit {band}-band")
+    title = f"Rho Statistics - Single Visit {band}-band"
+    if coaddDetectorFile is not None:
+        title += " (coadd detectors only)"
+    output_plot = os.path.join(repOut, f'rho_stats_{suffix}.png')
+    plot_rho_statistics(rho_stats, output_plot, title=title)
 
 
 def main():
@@ -611,6 +713,12 @@ def main():
                         help='Y-axis limits for rho3alt (min max, e.g. 0 1e-4)')
     parser.add_argument('--desFile', type=str, default=None,
                         help='Path to DES Y6 rho stats pkl file for comparison overlay')
+    parser.add_argument('--npatch', type=int, default=100,
+                        help='Number of patches for jackknife covariance (default: 100)')
+    parser.add_argument('--patchCenters', type=str, default=None,
+                        help='Path to patch centers file (for consistent patches across runs)')
+    parser.add_argument('--coaddDetectorFile', type=str, default=None,
+                        help='Path to coadd_detector_mapping.pkl to filter only detectors in coadd (single_visit mode)')
 
     args = parser.parse_args()
 
@@ -639,7 +747,7 @@ def main():
         exclude_crowded = not args.no_exclude_crowded
         run_coadd(args.band, args.tractMappingFile, args.repOut,
                   exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
-                  max_tracts=args.max)
+                  max_tracts=args.max, npatch=args.npatch, patch_centers=args.patchCenters)
     else:
         if args.visitMappingFile is None:
             raise ValueError("--visitMappingFile required for single_visit mode")
@@ -648,7 +756,8 @@ def main():
         exclude_crowded = not args.no_exclude_crowded
         run_single_visit(args.band, args.visitMappingFile, args.repOut,
                          exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
-                         max_visits=args.max)
+                         max_visits=args.max, npatch=args.npatch, patch_centers=args.patchCenters,
+                         coaddDetectorFile=args.coaddDetectorFile)
 
 
 if __name__ == "__main__":

@@ -91,7 +91,7 @@ PARQUET_COLUMNS = [
 ]
 
 
-def load_visit_data(parquet_path):
+def load_visit_data(parquet_path, coadd_detectors=None):
     """
     Load visit data from parquet file and compute derived columns.
     Uses sky-coordinate moments (Iuu, Ivv, Iuv) in arcsec^2.
@@ -100,6 +100,8 @@ def load_visit_data(parquet_path):
     ----------
     parquet_path : str
         Path to the parquet file
+    coadd_detectors : set or None
+        If provided, only keep sources from detectors in this set.
 
     Returns
     -------
@@ -108,6 +110,12 @@ def load_visit_data(parquet_path):
     """
     # Read parquet file with polars (fast!)
     table = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
+
+    # Filter by coadd detectors if specified
+    if coadd_detectors is not None:
+        detector_col = table['detector'].to_numpy()
+        mask = np.isin(detector_col, list(coadd_detectors))
+        table = table.filter(polars.Series(mask))
 
     # Convert to numpy arrays (sky-coord moments in arcsec^2)
     iuu_src = table['shape_Iuu'].to_numpy()
@@ -148,7 +156,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
                            key_second_moment='dT_T', bin_spacing=120, colorScale=0.005,
                            autoColorScale=False, autoColorScaleCst=2.,
                            colorlabel=None, title=None, pklInput=None, psf_max_value=0,
-                           exclude_crowded=False, galactic_b_min=20., lmc_radius=10., smc_radius=5.):
+                           exclude_crowded=False, galactic_b_min=20., lmc_radius=10., smc_radius=5.,
+                           coaddDetectorFile=None):
     """
     Plot spatial variation of PSF second moments on the sky using HEALPix binning.
 
@@ -186,6 +195,9 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         Radius around LMC to exclude (degrees)
     smc_radius : float
         Radius around SMC to exclude (degrees)
+    coaddDetectorFile : str
+        Path to coadd_detector_mapping.pkl. If provided, only use detectors that
+        went into the coadd (for apples-to-apples comparison).
     """
 
     CMAP = plt.cm.inferno
@@ -194,6 +206,13 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         # Load the visit mapping
         with open(visitMappingFile, 'rb') as f:
             visit_mapping = pickle.load(f)
+
+        # Load coadd detector mapping if specified
+        coadd_detector_mapping = None
+        if coaddDetectorFile is not None:
+            with open(coaddDetectorFile, 'rb') as f:
+                coadd_detector_mapping = pickle.load(f)
+            print(f"Loaded coadd detector mapping: {len(coadd_detector_mapping)} visits")
 
         # Filter visits by band(s)
         selected_visits = []
@@ -207,10 +226,19 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         meanifyHealpix = treegp.meanify_healpix(bin_spacing=bin_spacing)
 
         n_skipped = 0
+        n_skipped_no_coadd = 0
         for visit, info in tqdm(selected_visits, desc="Loop over visits to compute spatial average on sky:"):
+            # Get coadd detectors for this visit (if filtering enabled)
+            coadd_detectors = None
+            if coadd_detector_mapping is not None:
+                if visit not in coadd_detector_mapping:
+                    n_skipped_no_coadd += 1
+                    continue
+                coadd_detectors = coadd_detector_mapping[visit]
+
             # Load data directly from parquet
             try:
-                data = load_visit_data(info['parquet_path'])
+                data = load_visit_data(info['parquet_path'], coadd_detectors=coadd_detectors)
             except polars.exceptions.ColumnNotFoundError as e:
                 n_skipped += 1
                 continue
@@ -242,6 +270,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
 
         if n_skipped > 0:
             print(f"Skipped {n_skipped} visits due to missing sky-coord columns")
+        if n_skipped_no_coadd > 0:
+            print(f"Skipped {n_skipped_no_coadd} visits not in coadd")
 
         meanifyHealpix.meanify()
 
@@ -330,6 +360,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
     suffix = f'{key_second_moment}_sky_{bands}_{int(bin_spacing)}_{int(psf_max_value)}'
     if exclude_crowded:
         suffix += '_noCrowded'
+    if coaddDetectorFile is not None:
+        suffix += '_coaddOnly'
 
     plt.savefig(os.path.join(repOutPlot, f'{suffix}.png'), dpi=150)
     plt.close()
@@ -381,6 +413,8 @@ def main():
                         help='Radius around LMC to exclude (degrees, default: 10)')
     parser.add_argument('--smc_radius', type=float, default=5.,
                         help='Radius around SMC to exclude (degrees, default: 5)')
+    parser.add_argument('--coaddDetectorFile', type=str, default=None,
+                        help='Path to coadd_detector_mapping.pkl to filter only detectors in coadd')
 
     args = parser.parse_args()
 
@@ -391,7 +425,8 @@ def main():
                            autoColorScaleCst=args.autoColorScaleCst,
                            colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value,
                            exclude_crowded=args.exclude_crowded, galactic_b_min=args.galactic_b_min,
-                           lmc_radius=args.lmc_radius, smc_radius=args.smc_radius)
+                           lmc_radius=args.lmc_radius, smc_radius=args.smc_radius,
+                           coaddDetectorFile=args.coaddDetectorFile)
 
 
 if __name__ == "__main__":
