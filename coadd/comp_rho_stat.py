@@ -262,7 +262,7 @@ def compute_rho_inputs(data, ellipticity_type='distortion', size_type='trace'):
     }
 
 
-def compute_rho_statistics(inputs, treecorr_config, npatch=100, patch_centers=None, patch_centers_file=None):
+def compute_rho_statistics(inputs, treecorr_config, npatch=25, patch_centers=None, patch_centers_file=None):
     """
     Compute all rho statistics with consistent patch centers for covariance estimation.
 
@@ -479,7 +479,7 @@ def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None, des_file
 
 
 def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None,
-              npatch=100, patch_centers=None, ellipticity_type='distortion'):
+              npatch=25, patch_centers=None, ellipticity_type='distortion'):
     """Run rho statistics on coadd data."""
     print(f"Computing rho statistics for COADD, band={band}, ellipticity_type={ellipticity_type}")
 
@@ -576,7 +576,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
 
 
 def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None,
-                     npatch=100, patch_centers=None, coaddDetectorFile=None, ellipticity_type='distortion'):
+                     npatch=25, patch_centers=None, coaddDetectorFile=None, ellipticity_type='distortion'):
     """Run rho statistics on single visit data."""
     print(f"Computing rho statistics for SINGLE VISIT, band={band}, ellipticity_type={ellipticity_type}")
 
@@ -727,8 +727,8 @@ def main():
                         help='Y-axis limits for rho3alt (min max, e.g. 0 1e-4)')
     parser.add_argument('--desFile', type=str, default=None,
                         help='Path to DES Y6 rho stats pkl file for comparison overlay')
-    parser.add_argument('--npatch', type=int, default=100,
-                        help='Number of patches for jackknife covariance (default: 100)')
+    parser.add_argument('--npatch', type=int, default=25,
+                        help='Number of patches for jackknife covariance (default: 25)')
     parser.add_argument('--patchCenters', type=str, default=None,
                         help='Path to patch centers file (for consistent patches across runs)')
     parser.add_argument('--coaddDetectorFile', type=str, default=None,
