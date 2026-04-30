@@ -5,10 +5,14 @@
 
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/coadd"
 PKL_DIR="${SCRIPT_DIR}/rho_stats"
-COADD_DETECTOR_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/coadd_detector_mapping.pkl"
+DES_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/all_xip-xim+errs_dict_v2.pkl"
 
 # Bands to process
 BANDS=("r")  # Add more: ("u" "g" "r" "i" "z" "y")
+
+# Modes and ellipticity types
+MODES=("coadd" "single_visit")
+ELLIPTICITY_TYPES=("distortion" "shear")
 
 # Y-axis limits per rho stat - adjust these as needed
 YLIM_RHO1=1e-5
@@ -29,45 +33,36 @@ echo "  rho3alt: [${YLIM_RHO3ALT_MIN}, ${YLIM_RHO3ALT_MAX}]"
 echo "=================================================="
 
 for band in "${BANDS[@]}"; do
-    echo ""
-    echo "Processing band: ${band}"
-    echo "--------------------------------------------------"
+    for mode in "${MODES[@]}"; do
+        for etype in "${ELLIPTICITY_TYPES[@]}"; do
+            echo ""
+            echo "Processing: band=${band}, mode=${mode}, ellipticity=${etype}"
+            echo "--------------------------------------------------"
 
-    # Coadd
-    pkl_file="${PKL_DIR}/rho_stats_coadd_${band}.pkl"
-    if [[ -f "$pkl_file" ]]; then
-        echo "  Replotting coadd..."
-        python ${SCRIPT_DIR}/comp_rho_stat.py --mode replot \
-            --pklInput "$pkl_file" \
-            --ylim_rho1 ${YLIM_RHO1} \
-            --ylim_rho2 ${YLIM_RHO2} \
-            --ylim_rho3 ${YLIM_RHO3} \
-            --ylim_rho4 ${YLIM_RHO4} \
-            --ylim_rho5 ${YLIM_RHO5} \
-            --ylim_rho3alt ${YLIM_RHO3ALT_MIN} ${YLIM_RHO3ALT_MAX} \
-            --desFile all_xip-xim+errs_dict_v2.pkl
-    else
-        echo "  Skipping coadd (not found): $pkl_file"
-    fi
+            # Build pkl filename based on mode
+            if [[ "$mode" == "coadd" ]]; then
+                pkl_file="${PKL_DIR}/rho_stats_coadd_${band}_${etype}.pkl"
+            else
+                pkl_file="${PKL_DIR}/rho_stats_single_visit_${band}_${etype}_coaddOnly.pkl"
+            fi
 
-    # Single visit
-    pkl_file="${PKL_DIR}/rho_stats_single_visit_${band}_coaddOnly.pkl"
-    if [[ -f "$pkl_file" ]]; then
-        echo "  Replotting single_visit..."
-        python ${SCRIPT_DIR}/comp_rho_stat.py --mode replot \
-            --pklInput "$pkl_file" \
-            --ylim_rho1 ${YLIM_RHO1} \
-            --ylim_rho2 ${YLIM_RHO2} \
-            --ylim_rho3 ${YLIM_RHO3} \
-            --ylim_rho4 ${YLIM_RHO4} \
-            --ylim_rho5 ${YLIM_RHO5} \
-            --ylim_rho3alt ${YLIM_RHO3ALT_MIN} ${YLIM_RHO3ALT_MAX} \
-            --desFile all_xip-xim+errs_dict_v2.pkl \
-            --coaddDetectorFile ${COADD_DETECTOR_FILE}
-    else
-        echo "  Skipping single_visit (not found): $pkl_file"
-    fi
+            if [[ -f "$pkl_file" ]]; then
+                echo "  Replotting: $pkl_file"
+                python ${SCRIPT_DIR}/comp_rho_stat.py --mode replot \
+                    --pklInput "$pkl_file" \
+                    --ylim_rho1 ${YLIM_RHO1} \
+                    --ylim_rho2 ${YLIM_RHO2} \
+                    --ylim_rho3 ${YLIM_RHO3} \
+                    --ylim_rho4 ${YLIM_RHO4} \
+                    --ylim_rho5 ${YLIM_RHO5} \
+                    --ylim_rho3alt ${YLIM_RHO3ALT_MIN} ${YLIM_RHO3ALT_MAX} \
+                    --desFile ${DES_FILE}
+            else
+                echo "  Skipping (not found): $pkl_file"
+            fi
 
+        done
+    done
 done
 
 echo "=================================================="
