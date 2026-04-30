@@ -293,6 +293,18 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         pixel_size_arcsec = dicInput['pixel_size_arcsec']
         valid_pixels = dicInput.get('valid_pixels', None)
 
+        # Apply crowded region filter on replot if requested
+        if exclude_crowded and coords0 is not None:
+            mask_crowded = filter_crowded_regions(
+                coords0[:, 0], coords0[:, 1],
+                galactic_b_min=galactic_b_min,
+                lmc_radius=lmc_radius,
+                smc_radius=smc_radius
+            )
+            params0 = params0.copy()
+            params0[~mask_crowded] = np.nan
+            print(f"Applied crowded filter on replot: {(~mask_crowded).sum()} pixels masked")
+
     # Compute color scale
     if autoColorScale:
         valid = np.isfinite(params0)
