@@ -390,6 +390,10 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=
         'rho3alt': r"$\rho'_{3}(\theta) = \langle \frac{\delta T}{T}, \frac{\delta T}{T}\rangle$",
     }
 
+    # LSSTCam scales
+    CCD_SCALE = 13.3  # arcmin (4000 pixels * 0.2 arcsec/pixel / 60)
+    FOCAL_PLANE_SCALE = 210.0  # arcmin (3.5 deg * 60)
+
     if ylims is None:
         ylims = {}
 
@@ -413,15 +417,20 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=
             y = rho['xip']
             yerr = np.sqrt(rho['varxip'])
 
-        ax.errorbar(theta, y, yerr=yerr, fmt='o-', capsize=2, markersize=4, label='DP2')
+        ax.errorbar(theta, y, yerr=yerr, fmt='o-', capsize=2, markersize=4, color='blue', label='Rubin DP2')
 
         # Overlay DES Y6 if provided (not for rho3alt)
         if des_rho is not None and rho_name in des_rho:
             des = des_rho[rho_name]
             ax.errorbar(des['meanr'], des['xip'], yerr=np.sqrt(des['varxip']),
-                        fmt='s--', capsize=2, markersize=4, alpha=0.7, color='C1', label='DES Y6 riz')
+                        fmt='s--', capsize=2, markersize=4, alpha=0.7, color='black', label='DES Y6 riz')
 
         ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+
+        # Add LSSTCam scale markers
+        ax.axvline(CCD_SCALE, color='red', linestyle=':', alpha=0.7, label='CCD scale' if idx == 0 else None)
+        ax.axvline(FOCAL_PLANE_SCALE, color='green', linestyle=':', alpha=0.7, label='Focal plane' if idx == 0 else None)
+
         ax.set_xscale('log')
         if rho_name != 'rho3alt':
             ax.set_yscale('symlog', linthresh=1e-8)
@@ -435,7 +444,7 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=
         ax.set_ylabel(rho_labels[rho_name])
         ax.grid(True, alpha=0.3)
 
-        if des_rho is not None and rho_name in des_rho:
+        if idx == 0:
             ax.legend(loc='best', fontsize=8)
 
     if title:
