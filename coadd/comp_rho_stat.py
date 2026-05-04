@@ -420,13 +420,13 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=
         if des_rho is not None and rho_name in des_rho:
             des = des_rho[rho_name]
             ax.errorbar(des['meanr'], des['xip'], yerr=np.sqrt(des['varxip']),
-                        fmt='s--', capsize=2, markersize=4, alpha=0.7, color='black', label='DES Y6 riz')
+                        fmt='s--', capsize=2, markersize=4, alpha=0.7, color='red', label='DES Y6 riz')
 
         ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
 
         # Add LSSTCam scale markers
-        ax.axvline(CCD_SCALE, color='red', linestyle=':', alpha=0.7, label='CCD scale' if idx == 0 else None)
-        ax.axvline(FOCAL_PLANE_SCALE, color='green', linestyle=':', alpha=0.7, label='Focal plane' if idx == 0 else None)
+        ax.axvline(CCD_SCALE, color='k', linestyle='--', alpha=1, label='LSSTCam CCD scale' if idx == 0 else None)
+        ax.axvline(FOCAL_PLANE_SCALE, color='k', linestyle=':', alpha=1, label='LSSTCam FoV scale' if idx == 0 else None)
 
         ax.set_xscale('log')
         if rho_name != 'rho3alt':
@@ -442,7 +442,7 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None, des_rho=
         ax.grid(True, alpha=0.3)
 
         if idx == 0:
-            ax.legend(loc='best', fontsize=8)
+            ax.legend(loc=4, fontsize=8)
 
     if title:
         fig.suptitle(title, fontsize=14, fontweight='bold')
