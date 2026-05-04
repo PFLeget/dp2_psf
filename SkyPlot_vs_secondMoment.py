@@ -157,7 +157,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
                            autoColorScale=False, autoColorScaleCst=2.,
                            colorlabel=None, title=None, pklInput=None, psf_max_value=0,
                            exclude_crowded=False, galactic_b_min=20., lmc_radius=10., smc_radius=5.,
-                           coaddDetectorFile=None):
+                           coaddDetectorFile=None,
+                           zoom_ra=None, zoom_dec=None, zoom_radius=None):
     """
     Plot spatial variation of PSF second moments on the sky using HEALPix binning.
 
@@ -198,6 +199,12 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
     coaddDetectorFile : str
         Path to coadd_detector_mapping.pkl. If provided, only use detectors that
         went into the coadd (for apples-to-apples comparison).
+    zoom_ra : float
+        RA center for zoom (degrees). If None, full sky.
+    zoom_dec : float
+        Dec center for zoom (degrees). If None, full sky.
+    zoom_radius : float
+        Radius for zoom (degrees). If None, full sky.
     """
 
     CMAP = plt.cm.inferno
@@ -343,28 +350,43 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
     fig = plt.figure(figsize=(16, 10))
     ax = fig.add_subplot(111)
 
-    # Use McBryde projection with survey capabilities (full sky view)
-    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
+    # Check if zooming
+    do_zoom = zoom_ra is not None and zoom_dec is not None and zoom_radius is not None
+
+    if do_zoom:
+        # Use gnomonic projection for zoomed view
+        from skyproj import GnomonicSkyproj
+        sp = GnomonicSkyproj(ax=ax, lon_0=zoom_ra, lat_0=zoom_dec)
+        sp.set_extent([zoom_ra - zoom_radius, zoom_ra + zoom_radius,
+                       zoom_dec - zoom_radius, zoom_dec + zoom_radius])
+    else:
+        # Use McBryde projection with survey capabilities (full sky view)
+        sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
 
     # Draw the HEALPix map
     im, lon_raster, lat_raster, values_raster = sp.draw_hpxmap(
-        healpix_map, nest=True, zoom=False, vmin=MIN, vmax=MAX, cmap=CMAP
+        healpix_map, nest=True, zoom=do_zoom, vmin=MIN, vmax=MAX, cmap=CMAP
     )
 
-    # Draw Milky Way plane
-    sp.draw_milky_way(label='Milky Way')
+    # Draw overlays only for full sky view
+    if not do_zoom:
+        # Draw Milky Way plane
+        sp.draw_milky_way(label='Milky Way')
 
-    # Draw DES footprint
-    sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
+        # Draw DES footprint
+        sp.draw_des(edgecolor='blue', lw=2, label='DES footprint')
 
     # Add colorbar (pad moves it to the right)
     sp.draw_colorbar(label=colorlabel, fontsize=14, pad=0.02)
 
     # Set title (y parameter moves it higher)
-    sp.ax.set_title(title, fontsize=16, y=1.05)
-
-    # Add legend
-    sp.ax.legend(loc='lower right', fontsize=10)
+    if do_zoom:
+        title_suffix = f"\nZoom: RA={zoom_ra:.1f}, Dec={zoom_dec:.1f}, r={zoom_radius:.1f} deg"
+        sp.ax.set_title(title + title_suffix, fontsize=16, y=1.02)
+    else:
+        sp.ax.set_title(title, fontsize=16, y=1.05)
+        # Add legend only for full sky
+        sp.ax.legend(loc='lower right', fontsize=10)
 
     plt.subplots_adjust(left=0.05, right=0.98, top=0.98, bottom=0.08)
 
@@ -374,6 +396,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         suffix += '_noCrowded'
     if coaddDetectorFile is not None:
         suffix += '_coaddOnly'
+    if do_zoom:
+        suffix += f'_zoom_{int(zoom_ra)}_{int(zoom_dec)}_{int(zoom_radius)}'
 
     plt.savefig(os.path.join(repOutPlot, f'{suffix}.png'), dpi=150)
     plt.close()
@@ -428,6 +452,14 @@ def main():
     parser.add_argument('--coaddDetectorFile', type=str, default=None,
                         help='Path to coadd_detector_mapping.pkl to filter only detectors in coadd')
 
+    # Zoom options
+    parser.add_argument('--zoom_ra', type=float, default=None,
+                        help='RA center for zoom (degrees)')
+    parser.add_argument('--zoom_dec', type=float, default=None,
+                        help='Dec center for zoom (degrees)')
+    parser.add_argument('--zoom_radius', type=float, default=None,
+                        help='Radius for zoom (degrees)')
+
     args = parser.parse_args()
 
     plot_Sky_second_Moment(bands=args.bands, visitMappingFile=args.visitMappingFile,
@@ -438,7 +470,8 @@ def main():
                            colorlabel=None, title=None, pklInput=args.pklInput, psf_max_value=args.psf_max_value,
                            exclude_crowded=args.exclude_crowded, galactic_b_min=args.galactic_b_min,
                            lmc_radius=args.lmc_radius, smc_radius=args.smc_radius,
-                           coaddDetectorFile=args.coaddDetectorFile)
+                           coaddDetectorFile=args.coaddDetectorFile,
+                           zoom_ra=args.zoom_ra, zoom_dec=args.zoom_dec, zoom_radius=args.zoom_radius)
 
 
 if __name__ == "__main__":
