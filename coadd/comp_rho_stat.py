@@ -191,29 +191,26 @@ def load_single_visit_data(parquet_path, coadd_detectors=None):
         'coord_ra', 'coord_dec',
         'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
         'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
-        'calib_psf_used',
         'detector',
     ]
 
     table = polars.scan_parquet(parquet_path).select(columns).collect()
 
-    # Filter to PSF stars
-    mask = table['calib_psf_used'].to_numpy() == True
-
     # Filter by coadd detectors if specified
     if coadd_detectors is not None:
         detector_col = table['detector'].to_numpy()
-        mask &= np.isin(detector_col, list(coadd_detectors))
+        mask = np.isin(detector_col, list(coadd_detectors))
+        table = table.filter(polars.Series(mask))
 
     return {
-        'ixx': table['shape_Iuu'].to_numpy()[mask],  # arcsec^2
-        'iyy': table['shape_Ivv'].to_numpy()[mask],
-        'ixy': table['shape_Iuv'].to_numpy()[mask],
-        'ixx_psf': table['psfShape_Iuu'].to_numpy()[mask],
-        'iyy_psf': table['psfShape_Ivv'].to_numpy()[mask],
-        'ixy_psf': table['psfShape_Iuv'].to_numpy()[mask],
-        'ra': np.degrees(table['coord_ra'].to_numpy()[mask]),
-        'dec': np.degrees(table['coord_dec'].to_numpy()[mask]),
+        'ixx': table['shape_Iuu'].to_numpy(),  # arcsec^2
+        'iyy': table['shape_Ivv'].to_numpy(),
+        'ixy': table['shape_Iuv'].to_numpy(),
+        'ixx_psf': table['psfShape_Iuu'].to_numpy(),
+        'iyy_psf': table['psfShape_Ivv'].to_numpy(),
+        'ixy_psf': table['psfShape_Iuv'].to_numpy(),
+        'ra': np.degrees(table['coord_ra'].to_numpy()),
+        'dec': np.degrees(table['coord_dec'].to_numpy()),
     }
 
 
