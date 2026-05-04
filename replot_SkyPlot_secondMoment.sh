@@ -6,10 +6,11 @@
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf"
 PKL_DIR="${SCRIPT_DIR}/plots"
 VISIT_MAPPING_FILE="${SCRIPT_DIR}/data/visit_parquet_mapping_skycoord.pkl"
+COADD_DETECTOR_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/coadd_detector_mapping.pkl"
 
 # Color scales - adjust these as needed
-COLOR_SCALE_de1=0.01
-COLOR_SCALE_de2=0.01
+COLOR_SCALE_de1=0.001
+COLOR_SCALE_de2=0.001
 COLOR_SCALE_dT_T=0.005
 
 # Bands and moments to process
@@ -25,7 +26,7 @@ echo "=================================================="
 for band in "${BANDS[@]}"; do
     for moment in "${MOMENTS[@]}"; do
         # Build pkl filename
-        pkl_file="${PKL_DIR}/${moment}_sky_${band}_3600_0.pkl"
+        pkl_file="${PKL_DIR}/${moment}_sky_${band}_3600_0_coaddOnly.pkl"
 
         if [[ ! -f "$pkl_file" ]]; then
             echo "Skipping (not found): ${pkl_file}"
@@ -44,7 +45,11 @@ for band in "${BANDS[@]}"; do
             --pklInput "$pkl_file" \
             --key_second_moment ${moment} \
             --colorScale ${COLOR_SCALE} \
-            --repOutPlot "${PKL_DIR}"
+            --repOutPlot "${PKL_DIR}" \
+            --bin_spacing 3600 \
+            --coaddDetectorFile "${COADD_DETECTOR_FILE}" \
+            --exclude_crowded \
+            --galactic_b_min 20
     done
 done
 

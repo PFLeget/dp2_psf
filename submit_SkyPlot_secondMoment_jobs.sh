@@ -9,6 +9,7 @@
 SCRIPT_DIR="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf"
 SCRIPT_NAME="SkyPlot_vs_secondMoment.py"
 VISIT_MAPPING_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/visit_parquet_mapping_skycoord.pkl"
+COADD_DETECTOR_FILE="/sdf/home/l/leget/rubin-user/lsst_dev/tickets/dp2_psf/data/coadd_detector_mapping.pkl"
 LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT_PLOT="${SCRIPT_DIR}/plots"
 
@@ -70,7 +71,8 @@ python ${SCRIPT_NAME} \\
     --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --key_second_moment ${moment} \\
     --bin_spacing ${BIN_SPACING} \\
-    --repOutPlot "${REP_OUT_PLOT}"
+    --repOutPlot "${REP_OUT_PLOT}" \\
+    --coaddDetectorFile "${COADD_DETECTOR_FILE}"
 
 echo "=================================================="
 echo "Job completed at: \$(date)"
