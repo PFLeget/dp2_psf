@@ -200,7 +200,8 @@ def plot_Sky_second_Moment(bands='g', visitMappingFile="data/visit_parquet_mappi
         went into the coadd (for apples-to-apples comparison).
     """
 
-    CMAP = plt.cm.inferno
+    #CMAP = plt.cm.inferno
+    CMAP = plt.cm.seismic
 
     if pklInput is None:
         # Load the visit mapping
