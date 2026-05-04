@@ -479,9 +479,11 @@ def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None, des_file
 
 
 def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None,
-              npatch=25, patch_centers=None, ellipticity_type='distortion'):
+              npatch=25, patch_centers=None, ellipticity_type='distortion',
+              min_sep=0.1, max_sep=900.0, nbins=40):
     """Run rho statistics on coadd data."""
     print(f"Computing rho statistics for COADD, band={band}, ellipticity_type={ellipticity_type}")
+    print(f"  Angular bins: {nbins} bins from {min_sep} to {max_sep} arcmin")
 
     with open(tractMappingFile, 'rb') as f:
         tract_mapping = pickle.load(f)
@@ -526,12 +528,12 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     # Compute rho inputs
     inputs = compute_rho_inputs(all_data, ellipticity_type=ellipticity_type)
 
-    # Treecorr config - match DES Y6 binning
+    # Treecorr config
     treecorr_config = {
         'sep_units': 'arcmin',
-        'min_sep': 0.28,
-        'max_sep': 900.0,
-        'nbins': 37,
+        'min_sep': min_sep,
+        'max_sep': max_sep,
+        'nbins': nbins,
     }
 
     # Build suffix for output files
@@ -576,9 +578,11 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
 
 
 def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None,
-                     npatch=25, patch_centers=None, coaddDetectorFile=None, ellipticity_type='distortion'):
+                     npatch=25, patch_centers=None, coaddDetectorFile=None, ellipticity_type='distortion',
+                     min_sep=0.1, max_sep=900.0, nbins=40):
     """Run rho statistics on single visit data."""
     print(f"Computing rho statistics for SINGLE VISIT, band={band}, ellipticity_type={ellipticity_type}")
+    print(f"  Angular bins: {nbins} bins from {min_sep} to {max_sep} arcmin")
 
     with open(visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
@@ -644,12 +648,12 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
     # Compute rho inputs
     inputs = compute_rho_inputs(all_data, ellipticity_type=ellipticity_type)
 
-    # Treecorr config - match DES Y6 binning
+    # Treecorr config
     treecorr_config = {
         'sep_units': 'arcmin',
-        'min_sep': 0.28,
-        'max_sep': 900.0,
-        'nbins': 37,
+        'min_sep': min_sep,
+        'max_sep': max_sep,
+        'nbins': nbins,
     }
 
     # Build suffix for output files
@@ -735,6 +739,12 @@ def main():
                         help='Path to coadd_detector_mapping.pkl to filter only detectors in coadd (single_visit mode)')
     parser.add_argument('--ellipticityType', type=str, default='distortion', choices=['distortion', 'shear'],
                         help='Ellipticity definition: distortion (default) or shear')
+    parser.add_argument('--min_sep', type=float, default=0.1,
+                        help='Minimum separation in arcmin (default: 0.1)')
+    parser.add_argument('--max_sep', type=float, default=900.0,
+                        help='Maximum separation in arcmin (default: 900)')
+    parser.add_argument('--nbins', type=int, default=40,
+                        help='Number of separation bins (default: 40)')
 
     args = parser.parse_args()
 
@@ -764,7 +774,8 @@ def main():
         run_coadd(args.band, args.tractMappingFile, args.repOut,
                   exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
                   max_tracts=args.max, npatch=args.npatch, patch_centers=args.patchCenters,
-                  ellipticity_type=args.ellipticityType)
+                  ellipticity_type=args.ellipticityType,
+                  min_sep=args.min_sep, max_sep=args.max_sep, nbins=args.nbins)
     else:
         if args.visitMappingFile is None:
             raise ValueError("--visitMappingFile required for single_visit mode")
@@ -774,7 +785,8 @@ def main():
         run_single_visit(args.band, args.visitMappingFile, args.repOut,
                          exclude_crowded=exclude_crowded, galactic_b_min=args.galactic_b_min,
                          max_visits=args.max, npatch=args.npatch, patch_centers=args.patchCenters,
-                         coaddDetectorFile=args.coaddDetectorFile, ellipticity_type=args.ellipticityType)
+                         coaddDetectorFile=args.coaddDetectorFile, ellipticity_type=args.ellipticityType,
+                         min_sep=args.min_sep, max_sep=args.max_sep, nbins=args.nbins)
 
 
 if __name__ == "__main__":
