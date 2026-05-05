@@ -381,14 +381,12 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
     band_visits.sort(key=lambda x: x[0])
     print(f"\nFound {len(band_visits)} visits in {band}-band")
 
-    # Limit visits for testing
-    if max_visits is not None and len(band_visits) > max_visits:
-        band_visits = band_visits[:max_visits]
-        print(f"Limited to first {max_visits} visits (testing mode)")
-
     if len(band_visits) == 0:
         print("No visits found. Exiting.")
         return
+
+    if max_visits is not None:
+        print(f"Will stop after {max_visits} visits with COSMOS sources (testing mode)")
 
     # Create output directory
     frames_dir = os.path.join(repOut, f'cosmos_frames_{band}_{ellipticity_type}')
@@ -419,12 +417,18 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
             n_visits_with_cosmos += 1
             for k in all_data:
                 all_data[k].append(data[k])
+
+            # Check if we've reached max_visits with COSMOS data
+            if max_visits is not None and n_visits_with_cosmos >= max_visits:
+                print(f"\nReached {max_visits} visits with COSMOS sources, stopping.")
+                break
         except Exception as e:
             print(f"  Warning: failed visit {visit}: {e}")
             continue
 
         # Check if we should save a frame (based on visits with COSMOS data)
-        if n_visits_with_cosmos % frame_interval != 0 and i != len(band_visits) - 1:
+        at_last_visit = (max_visits is not None and n_visits_with_cosmos >= max_visits) or (i == len(band_visits) - 1)
+        if n_visits_with_cosmos % frame_interval != 0 and not at_last_visit:
             continue
 
         # Concatenate all accumulated data
