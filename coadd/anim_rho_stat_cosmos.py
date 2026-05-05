@@ -217,7 +217,7 @@ def compute_healpix_maps(inputs, bin_spacing=30):
 
 
 def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
-               ylims=None, sky_color_scales=None):
+               ylims=None, sky_color_scales=None, xlim=None, sky_extent=None):
     """
     Plot a single frame with 3x3 grid layout.
 
@@ -263,6 +263,11 @@ def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
         'e2_res': r'$\delta e_2$',
     }
 
+    # Default sky extent if not provided
+    if sky_extent is None:
+        sky_extent = [COSMOS_RA - COSMOS_RADIUS - 0.5, COSMOS_RA + COSMOS_RADIUS + 0.5,
+                      COSMOS_DEC - COSMOS_RADIUS - 0.5, COSMOS_DEC + COSMOS_RADIUS + 0.5]
+
     # Grid layout mapping
     sky_panels = [(0, 0, 'dT_T'), (1, 0, 'e1_res'), (2, 0, 'e2_res')]
     rho_panels = [
@@ -278,8 +283,7 @@ def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
         ax = fig.add_subplot(gs[row, col])
 
         sp = GnomonicSkyproj(ax=ax, lon_0=COSMOS_RA, lat_0=COSMOS_DEC)
-        sp.set_extent([COSMOS_RA - COSMOS_RADIUS - 0.5, COSMOS_RA + COSMOS_RADIUS + 0.5,
-                       COSMOS_DEC - COSMOS_RADIUS - 0.5, COSMOS_DEC + COSMOS_RADIUS + 0.5])
+        sp.set_extent(sky_extent)
 
         hpx_data = healpix_maps[key]
         npix = hpg.nside_to_npixel(hpx_data['nside'])
@@ -326,6 +330,9 @@ def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
         ax.set_ylabel(rho_labels[rho_name], fontsize=9)
         ax.grid(True, alpha=0.3)
         ax.tick_params(labelsize=8)
+
+        if xlim is not None:
+            ax.set_xlim(xlim)
 
     # Main title
     fig.suptitle(f'COSMOS DDF Rho Statistics | Band: {band} | Visits: {n_visits} | Sources: {n_sources:,}',
@@ -459,8 +466,11 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
 
         # Plot frame
         frame_file = os.path.join(frames_dir, f'frame_{frame_count:04d}.png')
+        sky_extent = [COSMOS_RA - COSMOS_RADIUS - 0.5, COSMOS_RA + COSMOS_RADIUS + 0.5,
+                      COSMOS_DEC - COSMOS_RADIUS - 0.5, COSMOS_DEC + COSMOS_RADIUS + 0.5]
         plot_frame(rho_stats, healpix_maps, n_visits_with_cosmos, n_sources, frame_file, band,
-                   ylims=ylims, sky_color_scales=sky_color_scales)
+                   ylims=ylims, sky_color_scales=sky_color_scales, xlim=(min_sep, max_sep),
+                   sky_extent=sky_extent)
         frame_count += 1
 
     print(f"\nSaved {frame_count} frames to: {frames_dir}/")
@@ -476,21 +486,21 @@ def main():
     parser.add_argument('--repOut', type=str, default='cosmos_rho_anim/', help='Output directory')
     parser.add_argument('--ellipticityType', type=str, default='distortion', choices=['distortion', 'shear'],
                         help='Ellipticity definition')
-    parser.add_argument('--min_sep', type=float, default=0.5, help='Min separation in arcmin')
-    parser.add_argument('--max_sep', type=float, default=250.0, help='Max separation in arcmin')
-    parser.add_argument('--nbins', type=int, default=20, help='Number of separation bins')
+    parser.add_argument('--min_sep', type=float, default=0.01, help='Min separation in arcmin')
+    parser.add_argument('--max_sep', type=float, default=300.0, help='Max separation in arcmin')
+    parser.add_argument('--nbins', type=int, default=240, help='Number of separation bins')
     parser.add_argument('--bin_spacing', type=float, default=30, help='HEALPix bin spacing in arcsec')
     parser.add_argument('--frame_interval', type=int, default=10, help='Save frame every N visits')
     parser.add_argument('--max_visits', type=int, default=None, help='Max visits to process (for testing)')
 
     # Y-axis limits
-    parser.add_argument('--ylim_rho1', type=float, default=1e-5)
-    parser.add_argument('--ylim_rho2', type=float, default=1e-5)
-    parser.add_argument('--ylim_rho3', type=float, default=1e-7)
-    parser.add_argument('--ylim_rho4', type=float, default=1e-6)
-    parser.add_argument('--ylim_rho5', type=float, default=1e-6)
-    parser.add_argument('--ylim_rho3alt_min', type=float, default=0)
-    parser.add_argument('--ylim_rho3alt_max', type=float, default=2e-5)
+    parser.add_argument('--ylim_rho1', type=float, default=5e-4)
+    parser.add_argument('--ylim_rho2', type=float, default=5e-4)
+    parser.add_argument('--ylim_rho3', type=float, default=5e-6)
+    parser.add_argument('--ylim_rho4', type=float, default=1e-5)
+    parser.add_argument('--ylim_rho5', type=float, default=5e-5)
+    parser.add_argument('--ylim_rho3alt_min', type=float, default=-1e-3)
+    parser.add_argument('--ylim_rho3alt_max', type=float, default=1e-3)
 
     # Sky color scales
     parser.add_argument('--sky_scale_dT', type=float, default=0.02, help='Color scale for dT/T')
