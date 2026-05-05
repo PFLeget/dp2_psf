@@ -328,7 +328,7 @@ def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
 
 def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
                   min_sep=0.5, max_sep=250.0, nbins=20, bin_spacing=30,
-                  ylims=None, sky_color_scales=None, frame_interval=10):
+                  ylims=None, sky_color_scales=None, frame_interval=10, max_visits=None):
     """
     Run animated rho statistics for COSMOS DDF.
 
@@ -354,6 +354,8 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
         Color scale limits for sky maps
     frame_interval : int
         Save a frame every N visits
+    max_visits : int
+        Maximum number of visits to process (for testing). None = all visits.
     """
     print(f"COSMOS DDF Animated Rho Statistics")
     print(f"  Band: {band}")
@@ -379,6 +381,11 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
     # Sort by visit number for temporal ordering
     cosmos_visits.sort(key=lambda x: x[0])
     print(f"Found {len(cosmos_visits)} visits overlapping COSMOS in {band}-band")
+
+    # Limit visits for testing
+    if max_visits is not None and len(cosmos_visits) > max_visits:
+        cosmos_visits = cosmos_visits[:max_visits]
+        print(f"Limited to first {max_visits} visits (testing mode)")
 
     if len(cosmos_visits) == 0:
         print("No visits found. Exiting.")
@@ -470,6 +477,7 @@ def main():
     parser.add_argument('--nbins', type=int, default=20, help='Number of separation bins')
     parser.add_argument('--bin_spacing', type=float, default=30, help='HEALPix bin spacing in arcsec')
     parser.add_argument('--frame_interval', type=int, default=10, help='Save frame every N visits')
+    parser.add_argument('--max_visits', type=int, default=None, help='Max visits to process (for testing)')
 
     # Y-axis limits
     parser.add_argument('--ylim_rho1', type=float, default=1e-5)
@@ -513,6 +521,7 @@ def main():
         ylims=ylims,
         sky_color_scales=sky_color_scales,
         frame_interval=args.frame_interval,
+        max_visits=args.max_visits,
     )
 
 
