@@ -45,30 +45,39 @@ CCD_SCALE = 13.3  # arcmin
 FOCAL_PLANE_SCALE = 210.0  # arcmin (3.5 deg)
 
 
-def visit_overlaps_cosmos(visit_ra, visit_dec, overlap_radius=1.75):
+def filter_sources_in_cosmos(ra, dec, radius=None):
     """
-    Check if a visit overlaps with COSMOS DDF.
+    Filter sources to keep only those within COSMOS region.
 
     Parameters
     ----------
-    visit_ra, visit_dec : float
-        Visit center coordinates in degrees
-    overlap_radius : float
-        Radius around visit center (focal plane radius in degrees)
+    ra, dec : arrays
+        Source coordinates in degrees
+    radius : float
+        Radius around COSMOS center to keep (degrees). Default: COSMOS_RADIUS + 0.5
 
     Returns
     -------
-    bool
-        True if visit overlaps with COSMOS
+    mask : boolean array
+        True for sources within COSMOS region
     """
-    visit_center = SkyCoord(ra=visit_ra * u.degree, dec=visit_dec * u.degree)
+    if radius is None:
+        radius = COSMOS_RADIUS + 0.5
+
+    coords = SkyCoord(ra=ra * u.degree, dec=dec * u.degree)
     cosmos_center = SkyCoord(ra=COSMOS_RA * u.degree, dec=COSMOS_DEC * u.degree)
-    sep = visit_center.separation(cosmos_center).degree
-    return sep < (overlap_radius + COSMOS_RADIUS)
+    sep = coords.separation(cosmos_center).degree
+    return sep < radius
 
 
-def load_single_visit_data(parquet_path):
-    """Load single visit data with sky coordinate moments."""
+
+
+def load_visit_data_in_cosmos(parquet_path):
+    """
+    Load single visit data and filter to sources in COSMOS region.
+
+    Returns None if no sources in COSMOS.
+    """
     columns = [
         'coord_ra', 'coord_dec',
         'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
@@ -77,25 +86,25 @@ def load_single_visit_data(parquet_path):
 
     table = polars.scan_parquet(parquet_path).select(columns).collect()
 
+    ra = np.degrees(table['coord_ra'].to_numpy())
+    dec = np.degrees(table['coord_dec'].to_numpy())
+
+    # Filter to COSMOS region
+    mask = filter_sources_in_cosmos(ra, dec)
+
+    if mask.sum() == 0:
+        return None
+
     return {
-        'ixx': table['shape_Iuu'].to_numpy(),
-        'iyy': table['shape_Ivv'].to_numpy(),
-        'ixy': table['shape_Iuv'].to_numpy(),
-        'ixx_psf': table['psfShape_Iuu'].to_numpy(),
-        'iyy_psf': table['psfShape_Ivv'].to_numpy(),
-        'ixy_psf': table['psfShape_Iuv'].to_numpy(),
-        'ra': np.degrees(table['coord_ra'].to_numpy()),
-        'dec': np.degrees(table['coord_dec'].to_numpy()),
+        'ixx': table['shape_Iuu'].to_numpy()[mask],
+        'iyy': table['shape_Ivv'].to_numpy()[mask],
+        'ixy': table['shape_Iuv'].to_numpy()[mask],
+        'ixx_psf': table['psfShape_Iuu'].to_numpy()[mask],
+        'iyy_psf': table['psfShape_Ivv'].to_numpy()[mask],
+        'ixy_psf': table['psfShape_Iuv'].to_numpy()[mask],
+        'ra': ra[mask],
+        'dec': dec[mask],
     }
-
-
-def filter_to_cosmos_region(data, radius_margin=0.5):
-    """Filter data to keep only sources within COSMOS region."""
-    coords = SkyCoord(ra=data['ra'] * u.degree, dec=data['dec'] * u.degree)
-    cosmos_center = SkyCoord(ra=COSMOS_RA * u.degree, dec=COSMOS_DEC * u.degree)
-    sep = coords.separation(cosmos_center).degree
-    mask = sep < (COSMOS_RADIUS + radius_margin)
-    return {k: v[mask] for k, v in data.items()}
 
 
 def compute_ellipticity(ixx, iyy, ixy, ellipticity_type='distortion'):
@@ -367,27 +376,17 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
     with open(visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
 
-    # Filter visits by band and COSMOS overlap
-    print("\nFiltering visits that overlap COSMOS...")
-    cosmos_visits = []
-    for visit, info in visit_mapping.items():
-        if info['band'] != band:
-            continue
-        # Check if visit overlaps COSMOS
-        if 'ra' in info and 'dec' in info:
-            if visit_overlaps_cosmos(info['ra'], info['dec']):
-                cosmos_visits.append((visit, info))
-
-    # Sort by visit number for temporal ordering
-    cosmos_visits.sort(key=lambda x: x[0])
-    print(f"Found {len(cosmos_visits)} visits overlapping COSMOS in {band}-band")
+    # Filter visits by band
+    band_visits = [(v, info) for v, info in visit_mapping.items() if info['band'] == band]
+    band_visits.sort(key=lambda x: x[0])
+    print(f"\nFound {len(band_visits)} visits in {band}-band")
 
     # Limit visits for testing
-    if max_visits is not None and len(cosmos_visits) > max_visits:
-        cosmos_visits = cosmos_visits[:max_visits]
+    if max_visits is not None and len(band_visits) > max_visits:
+        band_visits = band_visits[:max_visits]
         print(f"Limited to first {max_visits} visits (testing mode)")
 
-    if len(cosmos_visits) == 0:
+    if len(band_visits) == 0:
         print("No visits found. Exiting.")
         return
 
@@ -406,25 +405,26 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
     # Accumulate data across visits
     all_data = {k: [] for k in ['ixx', 'iyy', 'ixy', 'ixx_psf', 'iyy_psf', 'ixy_psf', 'ra', 'dec']}
     frame_count = 0
+    n_visits_with_cosmos = 0
 
-    for i, (visit, info) in enumerate(tqdm(cosmos_visits, desc="Processing visits")):
+    for i, (visit, info) in enumerate(tqdm(band_visits, desc="Processing visits")):
         try:
-            data = load_single_visit_data(info['parquet_path'])
-            # Filter to COSMOS region only
-            data = filter_to_cosmos_region(data)
+            # Load visit and filter to COSMOS region
+            data = load_visit_data_in_cosmos(info['parquet_path'])
 
-            if len(data['ra']) == 0:
+            if data is None:
+                # No sources in COSMOS for this visit
                 continue
 
+            n_visits_with_cosmos += 1
             for k in all_data:
                 all_data[k].append(data[k])
         except Exception as e:
             print(f"  Warning: failed visit {visit}: {e}")
             continue
 
-        # Check if we should save a frame
-        n_visits = i + 1
-        if n_visits % frame_interval != 0 and n_visits != len(cosmos_visits):
+        # Check if we should save a frame (based on visits with COSMOS data)
+        if n_visits_with_cosmos % frame_interval != 0 and i != len(band_visits) - 1:
             continue
 
         # Concatenate all accumulated data
@@ -437,7 +437,7 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
 
         n_sources = len(combined['ra'])
         if n_sources < 100:
-            print(f"  Skipping frame {n_visits}: only {n_sources} sources")
+            print(f"  Skipping frame {n_visits_with_cosmos}: only {n_sources} sources")
             continue
 
         # Compute rho inputs
@@ -447,7 +447,7 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
         try:
             rho_stats = compute_rho_statistics(inputs, treecorr_config)
         except Exception as e:
-            print(f"  Warning: rho stat computation failed at visit {n_visits}: {e}")
+            print(f"  Warning: rho stat computation failed at visit {n_visits_with_cosmos}: {e}")
             continue
 
         # Compute HEALPix maps
@@ -455,7 +455,7 @@ def run_animation(band, visitMappingFile, repOut, ellipticity_type='distortion',
 
         # Plot frame
         frame_file = os.path.join(frames_dir, f'frame_{frame_count:04d}.png')
-        plot_frame(rho_stats, healpix_maps, n_visits, n_sources, frame_file, band,
+        plot_frame(rho_stats, healpix_maps, n_visits_with_cosmos, n_sources, frame_file, band,
                    ylims=ylims, sky_color_scales=sky_color_scales)
         frame_count += 1
 
