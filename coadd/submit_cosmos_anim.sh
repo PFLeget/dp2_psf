@@ -51,18 +51,18 @@ python ${SCRIPT_DIR}/anim_rho_stat_cosmos.py \
     --visitMappingFile ${VISIT_MAPPING} \
     --repOut ${OUTPUT_DIR} \
     --ellipticityType distortion \
-    --min_sep 0.5 \
-    --max_sep 250 \
-    --nbins 20 \
-    --bin_spacing 30 \
-    --frame_interval 5 \
-    --ylim_rho1 1e-5 \
-    --ylim_rho2 1e-5 \
-    --ylim_rho3 1e-7 \
-    --ylim_rho4 1e-6 \
-    --ylim_rho5 1e-6 \
-    --ylim_rho3alt_min 0 \
-    --ylim_rho3alt_max 2e-5 \
+    --min_sep 0.01 \
+    --max_sep 300 \
+    --nbins 30 \
+    --bin_spacing 240 \
+    --frame_interval 10 \
+    --ylim_rho1 5e-4 \
+    --ylim_rho2 5e-4 \
+    --ylim_rho3 5e-6 \
+    --ylim_rho4 1e-5 \
+    --ylim_rho5 5e-5 \
+    --ylim_rho3alt_min -1e-3 \
+    --ylim_rho3alt_max 1e-3 \
     --sky_scale_dT 0.02 \
     --sky_scale_de 0.01
 
