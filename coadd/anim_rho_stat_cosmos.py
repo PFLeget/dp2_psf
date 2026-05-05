@@ -291,11 +291,10 @@ def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
         healpix_map[hpx_data['valid_pixels']] = hpx_data['params0']
 
         vmin, vmax = -sky_color_scales[key], sky_color_scales[key]
-        im, _, _, _ = sp.draw_hpxmap(healpix_map, nest=True, zoom=True,
+        im, _, _, _ = sp.draw_hpxmap(healpix_map, nest=True, zoom=False,
                                       vmin=vmin, vmax=vmax, cmap=CMAP)
-        # Force fixed extent after drawing
-        ax.set_xlim(sky_extent[0], sky_extent[1])
-        ax.set_ylim(sky_extent[2], sky_extent[3])
+        # Force fixed extent after drawing (set_extent uses lon/lat)
+        sp.set_extent(sky_extent)
         sp.draw_colorbar(label=sky_labels[key], fontsize=10, pad=0.02)
         ax.set_title(f'COSMOS {sky_labels[key]}', fontsize=11)
 
