@@ -293,6 +293,9 @@ def plot_frame(rho_stats, healpix_maps, n_visits, n_sources, output_file, band,
         vmin, vmax = -sky_color_scales[key], sky_color_scales[key]
         im, _, _, _ = sp.draw_hpxmap(healpix_map, nest=True, zoom=True,
                                       vmin=vmin, vmax=vmax, cmap=CMAP)
+        # Force fixed extent after drawing
+        ax.set_xlim(sky_extent[0], sky_extent[1])
+        ax.set_ylim(sky_extent[2], sky_extent[3])
         sp.draw_colorbar(label=sky_labels[key], fontsize=10, pad=0.02)
         ax.set_title(f'COSMOS {sky_labels[key]}', fontsize=11)
 
@@ -488,8 +491,8 @@ def main():
                         help='Ellipticity definition')
     parser.add_argument('--min_sep', type=float, default=0.01, help='Min separation in arcmin')
     parser.add_argument('--max_sep', type=float, default=300.0, help='Max separation in arcmin')
-    parser.add_argument('--nbins', type=int, default=240, help='Number of separation bins')
-    parser.add_argument('--bin_spacing', type=float, default=30, help='HEALPix bin spacing in arcsec')
+    parser.add_argument('--nbins', type=int, default=30, help='Number of separation bins')
+    parser.add_argument('--bin_spacing', type=float, default=240, help='HEALPix bin spacing in arcsec')
     parser.add_argument('--frame_interval', type=int, default=10, help='Save frame every N visits')
     parser.add_argument('--max_visits', type=int, default=None, help='Max visits to process (for testing)')
 
