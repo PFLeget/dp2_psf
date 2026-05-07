@@ -32,6 +32,10 @@ COSMOS_DEC = 2.21   # degrees
 CCD_SCALE = 13.3  # arcmin
 FOCAL_PLANE_SCALE = 210.0  # arcmin
 
+# Detector types
+ITL_DETECTORS = np.concatenate((np.arange(0, 36), np.arange(72, 81), np.arange(162, 189)))
+E2V_DETECTORS = np.concatenate((np.arange(36, 72), np.arange(81, 162)))
+
 
 def angular_distance(ra, dec, ra_center=0, dec_center=0, unit='arcmin'):
     """Compute angular distance from a center point."""
@@ -65,15 +69,34 @@ def get_cosmos_visits(repo, collection, band, max_sep_deg=0.5):
     return list(visitId_cosmos)
 
 
-def load_single_visit_data(parquet_path):
-    """Load single visit data with sky coordinate moments."""
+def load_single_visit_data(parquet_path, detector_filter=None):
+    """Load single visit data with sky coordinate moments.
+
+    Parameters
+    ----------
+    parquet_path : str
+        Path to parquet file
+    detector_filter : str or None
+        'e2v', 'itl', or None (all detectors)
+    """
     columns = [
-        'coord_ra', 'coord_dec',
+        'coord_ra', 'coord_dec', 'detector',
         'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
         'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
     ]
 
     table = polars.scan_parquet(parquet_path).select(columns).collect()
+
+    # Filter by detector type
+    if detector_filter is not None:
+        detector_col = table['detector'].to_numpy()
+        if detector_filter == 'e2v':
+            mask = np.isin(detector_col, E2V_DETECTORS)
+        elif detector_filter == 'itl':
+            mask = np.isin(detector_col, ITL_DETECTORS)
+        else:
+            raise ValueError(f"Unknown detector_filter: {detector_filter}")
+        table = table.filter(polars.Series(mask))
 
     return {
         'ixx': table['shape_Iuu'].to_numpy(),
@@ -243,8 +266,8 @@ def plot_rho_statistics(rho_stats, output_file, title=None, ylims=None):
 def main():
     parser = argparse.ArgumentParser(description="Compute Rho statistics for COSMOS DDF")
     parser.add_argument('--band', type=str, default='r', help='Band to process')
-    parser.add_argument('--repo', type=str, default='/repo/embargo')
-    parser.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v29_0_0/DM-50219')
+    parser.add_argument('--repo', type=str, default='dp2_prep')
+    parser.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2')
     parser.add_argument('--visitMappingFile', type=str, required=True,
                         help='Path to visit_parquet_mapping_skycoord.pkl')
     parser.add_argument('--repOut', type=str, default='rho_stats_cosmos/', help='Output directory')
@@ -253,12 +276,15 @@ def main():
     parser.add_argument('--max_sep', type=float, default=300.0, help='Max separation in arcmin')
     parser.add_argument('--nbins', type=int, default=30, help='Number of separation bins')
     parser.add_argument('--max_visits', type=int, default=None, help='Max COSMOS visits to process')
+    parser.add_argument('--detector_filter', type=str, default=None, choices=['e2v', 'itl'],
+                        help='Filter by detector type: e2v or itl')
 
     args = parser.parse_args()
 
     print(f"COSMOS Rho Statistics")
     print(f"  Band: {args.band}")
     print(f"  Ellipticity type: {args.ellipticityType}")
+    print(f"  Detector filter: {args.detector_filter if args.detector_filter else 'all'}")
     print(f"  Angular bins: {args.nbins} bins from {args.min_sep} to {args.max_sep} arcmin")
 
     # Get COSMOS visits from Butler
@@ -284,7 +310,7 @@ def main():
 
         info = visit_mapping[visit_id]
         try:
-            data = load_single_visit_data(info['parquet_path'])
+            data = load_single_visit_data(info['parquet_path'], detector_filter=args.detector_filter)
             for k in all_data:
                 all_data[k].append(data[k])
         except Exception as e:
@@ -323,6 +349,8 @@ def main():
 
     # Save results
     suffix = f'cosmos_{args.band}_{args.ellipticityType}'
+    if args.detector_filter:
+        suffix += f'_{args.detector_filter}'
     output_pkl = os.path.join(args.repOut, f'rho_stats_{suffix}.pkl')
     with open(output_pkl, 'wb') as f:
         pickle.dump({
