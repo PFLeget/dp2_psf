@@ -69,7 +69,7 @@ def get_cosmos_visits(repo, collection, band, max_sep_deg=0.5):
     return list(visitId_cosmos)
 
 
-def load_single_visit_data(parquet_path, detector_filter=None):
+def load_single_visit_data(parquet_path, detector_filter=None, snr_min=None, snr_max=None):
     """Load single visit data with sky coordinate moments.
 
     Parameters
@@ -78,11 +78,16 @@ def load_single_visit_data(parquet_path, detector_filter=None):
         Path to parquet file
     detector_filter : str or None
         'e2v', 'itl', or None (all detectors)
+    snr_min : float or None
+        Minimum SNR cut
+    snr_max : float or None
+        Maximum SNR cut
     """
     columns = [
         'coord_ra', 'coord_dec', 'detector',
         'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
         'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
+        'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
     ]
 
     table = polars.scan_parquet(parquet_path).select(columns).collect()
@@ -96,6 +101,18 @@ def load_single_visit_data(parquet_path, detector_filter=None):
             mask = np.isin(detector_col, ITL_DETECTORS)
         else:
             raise ValueError(f"Unknown detector_filter: {detector_filter}")
+        table = table.filter(polars.Series(mask))
+
+    # Filter by SNR
+    if snr_min is not None or snr_max is not None:
+        flux = table['base_GaussianFlux_instFlux'].to_numpy()
+        flux_err = table['base_GaussianFlux_instFluxErr'].to_numpy()
+        snr = flux / flux_err
+        mask = np.ones(len(snr), dtype=bool)
+        if snr_min is not None:
+            mask &= snr >= snr_min
+        if snr_max is not None:
+            mask &= snr <= snr_max
         table = table.filter(polars.Series(mask))
 
     return {
@@ -278,6 +295,8 @@ def main():
     parser.add_argument('--max_visits', type=int, default=None, help='Max COSMOS visits to process')
     parser.add_argument('--detector_filter', type=str, default=None, choices=['e2v', 'itl'],
                         help='Filter by detector type: e2v or itl')
+    parser.add_argument('--snr_min', type=float, default=None, help='Minimum SNR cut')
+    parser.add_argument('--snr_max', type=float, default=None, help='Maximum SNR cut')
 
     args = parser.parse_args()
 
@@ -285,6 +304,7 @@ def main():
     print(f"  Band: {args.band}")
     print(f"  Ellipticity type: {args.ellipticityType}")
     print(f"  Detector filter: {args.detector_filter if args.detector_filter else 'all'}")
+    print(f"  SNR range: [{args.snr_min}, {args.snr_max}]")
     print(f"  Angular bins: {args.nbins} bins from {args.min_sep} to {args.max_sep} arcmin")
 
     # Get COSMOS visits from Butler
@@ -310,7 +330,8 @@ def main():
 
         info = visit_mapping[visit_id]
         try:
-            data = load_single_visit_data(info['parquet_path'], detector_filter=args.detector_filter)
+            data = load_single_visit_data(info['parquet_path'], detector_filter=args.detector_filter,
+                                          snr_min=args.snr_min, snr_max=args.snr_max)
             for k in all_data:
                 all_data[k].append(data[k])
         except Exception as e:
@@ -351,6 +372,10 @@ def main():
     suffix = f'cosmos_{args.band}_{args.ellipticityType}'
     if args.detector_filter:
         suffix += f'_{args.detector_filter}'
+    if args.snr_min is not None:
+        suffix += f'_snrmin{int(args.snr_min)}'
+    if args.snr_max is not None:
+        suffix += f'_snrmax{int(args.snr_max)}'
     output_pkl = os.path.join(args.repOut, f'rho_stats_{suffix}.pkl')
     with open(output_pkl, 'wb') as f:
         pickle.dump({
