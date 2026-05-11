@@ -272,7 +272,7 @@ def main():
                         help='Path to visit_parquet_mapping_skycoord.pkl')
     parser.add_argument('--repOut', type=str, default='rho_stats_cosmos/', help='Output directory')
     parser.add_argument('--ellipticityType', type=str, default='distortion', choices=['distortion', 'shear'])
-    parser.add_argument('--min_sep', type=float, default=0.01, help='Min separation in arcmin')
+    parser.add_argument('--min_sep', type=float, default=0.1, help='Min separation in arcmin')
     parser.add_argument('--max_sep', type=float, default=300.0, help='Max separation in arcmin')
     parser.add_argument('--nbins', type=int, default=30, help='Number of separation bins')
     parser.add_argument('--max_visits', type=int, default=None, help='Max COSMOS visits to process')
