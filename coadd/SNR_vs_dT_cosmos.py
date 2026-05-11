@@ -33,10 +33,10 @@ ITL_DETECTORS = np.concatenate((np.arange(0, 36), np.arange(72, 81), np.arange(1
 E2V_DETECTORS = np.concatenate((np.arange(36, 72), np.arange(81, 162)))
 
 
-# Columns to read from parquet files
+# Columns to read from parquet files (sky coordinates)
 PARQUET_COLUMNS = [
-    'slot_Shape_xx', 'slot_Shape_yy', 'slot_Shape_xy',
-    'slot_PsfShape_xx', 'slot_PsfShape_xy', 'slot_PsfShape_yy',
+    'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
+    'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
     'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
     'coord_ra', 'coord_dec',
     'detector', 'calib_psf_reserved', 'psf_max_value',
@@ -98,15 +98,28 @@ def load_visit_data(parquet_path, detector_filter=None):
             raise ValueError(f"Unknown detector_filter: {detector_filter}")
         table = table.filter(polars.Series(mask))
 
-    slot_Shape_xx = table['slot_Shape_xx'].to_numpy()
-    slot_Shape_yy = table['slot_Shape_yy'].to_numpy()
-    slot_PsfShape_xx = table['slot_PsfShape_xx'].to_numpy()
-    slot_PsfShape_yy = table['slot_PsfShape_yy'].to_numpy()
+    # Sky coordinate moments (Iuu, Ivv, Iuv in arcsec^2)
+    iuu_src = table['shape_Iuu'].to_numpy()
+    ivv_src = table['shape_Ivv'].to_numpy()
+    iuv_src = table['shape_Iuv'].to_numpy()
+    iuu_psf = table['psfShape_Iuu'].to_numpy()
+    ivv_psf = table['psfShape_Ivv'].to_numpy()
+    iuv_psf = table['psfShape_Iuv'].to_numpy()
 
     # Compute derived quantities
-    T_src = slot_Shape_xx + slot_Shape_yy
-    T_psf = slot_PsfShape_xx + slot_PsfShape_yy
+    T_src = iuu_src + ivv_src
+    T_psf = iuu_psf + ivv_psf
     dT_T = (T_src - T_psf) / T_src
+
+    # Ellipticities (distortion definition)
+    e1_src = (iuu_src - ivv_src) / T_src
+    e2_src = 2 * iuv_src / T_src
+    e1_psf = (iuu_psf - ivv_psf) / T_psf
+    e2_psf = 2 * iuv_psf / T_psf
+
+    # Ellipticity residuals
+    de1 = e1_src - e1_psf
+    de2 = e2_src - e2_psf
 
     # Compute SNR
     flux = table['base_GaussianFlux_instFlux'].to_numpy()
@@ -115,6 +128,8 @@ def load_visit_data(parquet_path, detector_filter=None):
 
     return {
         'dT_T': dT_T,
+        'de1': de1,
+        'de2': de2,
         'snr': snr,
         'psf_max_value': table['psf_max_value'].to_numpy(),
         'ra': table['coord_ra'].to_numpy(),
@@ -223,11 +238,15 @@ def plot_snr_vs_dT_cosmos(band='r', repo='/repo/embargo',
         visit_mapping = pickle.load(f)
 
     # Initialize meanify with x bounds for O(1) memory binning
-    meanify = meanify1D_wrms(bin_spacing=bin_spacing, x_min=x_min, x_max=x_max)
+    meanify_dT = meanify1D_wrms(bin_spacing=bin_spacing, x_min=x_min, x_max=x_max)
+    meanify_de1 = meanify1D_wrms(bin_spacing=bin_spacing, x_min=x_min, x_max=x_max)
+    meanify_de2 = meanify1D_wrms(bin_spacing=bin_spacing, x_min=x_min, x_max=x_max)
 
     # Load all data
     all_x = []
     all_dT_T = []
+    all_de1 = []
+    all_de2 = []
     n_loaded = 0
 
     for visit_id in tqdm(cosmos_visit_ids, desc="Loading visits"):
@@ -242,83 +261,95 @@ def plot_snr_vs_dT_cosmos(band='r', repo='/repo/embargo',
             # Filter valid data
             x_data = data[x_col]
             valid = np.isfinite(x_data) & np.isfinite(data['dT_T'])
+            valid &= np.isfinite(data['de1']) & np.isfinite(data['de2'])
             valid &= (x_data > x_min) & (x_data < x_max)
 
             if np.sum(valid) > 0:
                 x_vals = x_data[valid]
                 dT_T = data['dT_T'][valid]
+                de1 = data['de1'][valid]
+                de2 = data['de2'][valid]
 
                 all_x.append(x_vals)
                 all_dT_T.append(dT_T)
-                meanify.add_data(x_vals, dT_T)
+                all_de1.append(de1)
+                all_de2.append(de2)
+                meanify_dT.add_data(x_vals, dT_T)
+                meanify_de1.add_data(x_vals, de1)
+                meanify_de2.add_data(x_vals, de2)
                 n_loaded += 1
 
         except Exception as e:
             print(f"Failed to load visit {visit_id}: {e}")
 
     # Compute binned statistics
-    meanify.meanify()
+    meanify_dT.meanify()
+    meanify_de1.meanify()
+    meanify_de2.meanify()
 
     # Concatenate all data for histogram
     all_x = np.concatenate(all_x)
     all_dT_T = np.concatenate(all_dT_T)
+    all_de1 = np.concatenate(all_de1)
+    all_de2 = np.concatenate(all_de2)
 
     print(f"Loaded {n_loaded} visits")
     print(f"Total stars: {len(all_x):,}")
 
-    # Create plot
-    fig = plt.figure(figsize=(12, 10))
-    plt.subplots_adjust(left=0.12, bottom=0.08, top=0.95, right=0.95, hspace=0)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[1, 2])
-
-    # Top panel: x distribution
-    ax1 = plt.subplot(gs[0])
-    ax1.hist(all_x, bins=meanify.binning, color='b', alpha=0.7, edgecolor='black', linewidth=0.5)
-    ax1.set_yscale('log')
-    ax1.set_ylabel('# stars', fontsize=14)
-    ax1.set_xlim(x_min, x_max)
-    ax1.tick_params(labelbottom=False)
-
-    det_str = f" ({detector_filter})" if detector_filter else ""
-    ax1.set_title(f"COSMOS DDF | Band: {band}{det_str} | N_visits: {n_loaded} | N_stars: {len(all_x):,}", fontsize=14)
-
-    # Add reference lines to top panel
-    ax1.axvline(x_low, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_low}')
-    ax1.axvline(x_high, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_high}')
-    ax1.legend(loc='upper right', fontsize=10)
-
-    # Bottom panel: dT/T vs x
-    ax2 = plt.subplot(gs[1])
-
-    # Plot binned average
-    valid_bins = np.isfinite(meanify.average)
-    ax2.scatter(meanify.x0[valid_bins], meanify.average[valid_bins], s=50, c='b', zorder=3, label='Binned mean')
-    ax2.errorbar(meanify.x0[valid_bins], meanify.average[valid_bins],
-                 yerr=meanify.std[valid_bins] / np.sqrt(meanify.count[valid_bins]),
-                 fmt='none', c='b', capsize=3, zorder=2)
-
-    # Reference lines
-    xlim = (x_min, x_max)
-    ax2.axhline(0, color='k', linestyle='--', linewidth=1, zorder=1)
-    ax2.fill_between(xlim, -0.004, 0.004, color='g', alpha=0.2, zorder=0, label='0.4% requirement')
-    ax2.fill_between(xlim, -0.001, 0.001, color='g', alpha=0.3, zorder=0, label='0.1% goal')
-
-    # Add reference lines to bottom panel
-    ax2.axvline(x_low, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_low}')
-    ax2.axvline(x_high, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_high}')
-
-    ax2.set_xlim(xlim)
-    ax2.set_ylim(-0.02, 0.02)
-    ax2.set_xlabel(x_label, fontsize=14)
-    ax2.set_ylabel('$\\langle \\delta T / T \\rangle$', fontsize=14)
-    ax2.legend(loc='upper right', fontsize=10)
-
-    # Save plot
     os.makedirs(repOutPlot, exist_ok=True)
-    output_file = os.path.join(repOutPlot, f'{file_suffix}.png')
-    plt.savefig(output_file, dpi=150)
-    plt.close()
-    print(f"Saved: {output_file}")
+    xlim = (x_min, x_max)
+    det_str = f" ({detector_filter})" if detector_filter else ""
+    title_base = f"COSMOS DDF | Band: {band}{det_str} | N_visits: {n_loaded} | N_stars: {len(all_x):,}"
+
+    # Helper function to create a single plot
+    def make_plot(meanify_obj, ylabel, y_col_name, ylim=(-0.02, 0.02), show_requirements=False):
+        fig = plt.figure(figsize=(12, 10))
+        plt.subplots_adjust(left=0.12, bottom=0.08, top=0.95, right=0.95, hspace=0)
+        gs_plot = gridspec.GridSpec(2, 1, height_ratios=[1, 2])
+
+        # Top panel: x distribution
+        ax1 = plt.subplot(gs_plot[0])
+        ax1.hist(all_x, bins=meanify_obj.binning, color='b', alpha=0.7, edgecolor='black', linewidth=0.5)
+        ax1.set_yscale('log')
+        ax1.set_ylabel('# stars', fontsize=14)
+        ax1.set_xlim(xlim)
+        ax1.tick_params(labelbottom=False)
+        ax1.set_title(title_base, fontsize=14)
+        ax1.axvline(x_low, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_low}')
+        ax1.axvline(x_high, color='r', linestyle='--', linewidth=2, label=f'{x_col}={x_high}')
+        ax1.legend(loc='upper right', fontsize=10)
+
+        # Bottom panel
+        ax2 = plt.subplot(gs_plot[1])
+        valid_bins = np.isfinite(meanify_obj.average)
+        ax2.scatter(meanify_obj.x0[valid_bins], meanify_obj.average[valid_bins], s=50, c='b', zorder=3, label='Binned mean')
+        ax2.errorbar(meanify_obj.x0[valid_bins], meanify_obj.average[valid_bins],
+                     yerr=meanify_obj.std[valid_bins] / np.sqrt(meanify_obj.count[valid_bins]),
+                     fmt='none', c='b', capsize=3, zorder=2)
+        ax2.axhline(0, color='k', linestyle='--', linewidth=1, zorder=1)
+
+        if show_requirements:
+            ax2.fill_between(xlim, -0.004, 0.004, color='g', alpha=0.2, zorder=0, label='0.4% requirement')
+            ax2.fill_between(xlim, -0.001, 0.001, color='g', alpha=0.3, zorder=0, label='0.1% goal')
+
+        ax2.axvline(x_low, color='r', linestyle='--', linewidth=2)
+        ax2.axvline(x_high, color='r', linestyle='--', linewidth=2)
+        ax2.set_xlim(xlim)
+        ax2.set_ylim(ylim)
+        ax2.set_xlabel(x_label, fontsize=14)
+        ax2.set_ylabel(ylabel, fontsize=14)
+        ax2.legend(loc='upper right', fontsize=10)
+
+        suffix = file_suffix.replace('dT_T', y_col_name)
+        output_file = os.path.join(repOutPlot, f'{suffix}.png')
+        plt.savefig(output_file, dpi=150)
+        plt.close()
+        print(f"Saved: {output_file}")
+
+    # Create three separate plots
+    make_plot(meanify_dT, '$\\langle \\delta T / T \\rangle$', 'dT_T', ylim=(-0.02, 0.02), show_requirements=True)
+    make_plot(meanify_de1, '$\\langle \\delta e_1 \\rangle$', 'de1', ylim=(-0.01, 0.01), show_requirements=False)
+    make_plot(meanify_de2, '$\\langle \\delta e_2 \\rangle$', 'de2', ylim=(-0.01, 0.01), show_requirements=False)
 
     # Save results to pickle
     results = {
@@ -326,10 +357,14 @@ def plot_snr_vs_dT_cosmos(band='r', repo='/repo/embargo',
         'n_visits': n_loaded,
         'n_stars': len(all_x),
         'x_type': x_col,
-        'x_bins': meanify.x0,
-        'dT_T_mean': meanify.average,
-        'dT_T_std': meanify.std,
-        'dT_T_count': meanify.count,
+        'x_bins': meanify_dT.x0,
+        'dT_T_mean': meanify_dT.average,
+        'dT_T_std': meanify_dT.std,
+        'dT_T_count': meanify_dT.count,
+        'de1_mean': meanify_de1.average,
+        'de1_std': meanify_de1.std,
+        'de2_mean': meanify_de2.average,
+        'de2_std': meanify_de2.std,
         'detector_filter': detector_filter,
     }
     results_file = os.path.join(repOutPlot, f'{file_suffix}.pkl')
