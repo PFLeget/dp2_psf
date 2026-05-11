@@ -341,8 +341,8 @@ def plot_snr_vs_dT_cosmos(band='r', repo='/repo/embargo',
 def main():
     parser = argparse.ArgumentParser(description="SNR vs dT/T analysis for COSMOS DDF")
     parser.add_argument('--band', type=str, default='r', help='Band to process')
-    parser.add_argument('--repo', type=str, default='/repo/embargo')
-    parser.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v29_0_0/DM-50219')
+    parser.add_argument('--repo', type=str, default='dp2_prep')
+    parser.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2')
     parser.add_argument('--visitMappingFile', type=str, required=True,
                         help='Path to visit_parquet_mapping.pkl')
     parser.add_argument('--repOutPlot', type=str, default='plots/',
