@@ -15,7 +15,7 @@ import argparse
 
 from lsst.daf.butler import Butler
 from lsst.obs.lsst import LsstCam
-from lsst.geom import Point2D
+import lsst.afw.cameraGeom as cameraGeom
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table
@@ -24,6 +24,8 @@ import astropy.units as u
 
 COSMOS_RA = 150.12  # degrees
 COSMOS_DEC = 2.21   # degrees
+
+camera = LsstCam.getCamera()
 
 # Columns to read from parquet files
 PARQUET_COLUMNS = [
@@ -73,20 +75,28 @@ def get_cosmos_visits(repo, collection, band, max_sep_deg=0.5):
     return list(visitId_cosmos)
 
 
-def get_focal_plane_transform(camera):
-    """Get CCD to focal plane transforms for all detectors."""
-    transforms = {}
-    for det in camera:
-        det_id = det.getId()
-        # Transform from pixels to focal plane (mm)
-        transforms[det_id] = det.getTransform(
-            det.makeCameraSys(LsstCam.PIXELS),
-            det.makeCameraSys(LsstCam.FOCAL_PLANE)
-        )
-    return transforms
+def pixel_to_focal(x, y, det):
+    """
+    Transform pixel coordinates to focal plane coordinates.
+
+    Parameters
+    ----------
+    x, y : array
+        Pixel coordinates.
+    det : lsst.afw.cameraGeom.Detector
+        Detector of interest.
+
+    Returns
+    -------
+    fpx, fpy : array
+        Focal plane position in millimeters in DVCS.
+    """
+    tx = det.getTransform(cameraGeom.PIXELS, cameraGeom.FOCAL_PLANE)
+    fpx, fpy = tx.getMapping().applyForward(np.vstack((x, y)))
+    return fpx.ravel(), fpy.ravel()
 
 
-def load_visit_data(parquet_path, visit_id, fp_transforms):
+def load_visit_data(parquet_path, visit_id):
     """Load visit data and compute all derived quantities."""
     table = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
     n = len(table)
@@ -115,14 +125,9 @@ def load_visit_data(parquet_path, visit_id, fp_transforms):
     # Transform CCD to focal plane for each detector
     for det_id in np.unique(data['detector']):
         mask = data['detector'] == det_id
-        if det_id not in fp_transforms:
-            continue
-        transform = fp_transforms[det_id]
-        for i in np.where(mask)[0]:
-            pt_ccd = Point2D(data['x_ccd'][i], data['y_ccd'][i])
-            pt_fp = transform.applyForward(pt_ccd)
-            data['x_fp'][i] = pt_fp.getX()
-            data['y_fp'][i] = pt_fp.getY()
+        x_fp, y_fp = pixel_to_focal(data['x_ccd'][mask], data['y_ccd'][mask], camera[det_id])
+        data['x_fp'][mask] = x_fp
+        data['y_fp'][mask] = y_fp
 
     # --- Sky coordinate derived quantities (arcsec^2) ---
     iuu_src = data['shape_Iuu']
@@ -208,11 +213,6 @@ def main():
     with open(args.visitMappingFile, 'rb') as f:
         visit_mapping = pickle.load(f)
 
-    # Get camera geometry for focal plane transform
-    print("Loading camera geometry...")
-    camera = LsstCam.getCamera()
-    fp_transforms = get_focal_plane_transform(camera)
-
     # Process all visits
     print(f"\nProcessing {len(cosmos_visit_ids)} visits...")
     all_data = None
@@ -223,7 +223,7 @@ def main():
 
         info = visit_mapping[visit_id]
         try:
-            data = load_visit_data(info['parquet_path'], visit_id, fp_transforms)
+            data = load_visit_data(info['parquet_path'], visit_id)
             if data is None:
                 continue
 
