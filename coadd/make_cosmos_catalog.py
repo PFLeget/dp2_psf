@@ -180,9 +180,9 @@ def load_visit_data(parquet_path, visit_id, fp_transforms):
 
 def main():
     parser = argparse.ArgumentParser(description="Create COSMOS star catalog for PSF debugging")
-    parser.add_argument('--repo', type=str, default='/repo/embargo')
-    parser.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v29_0_0/DM-50219')
-    parser.add_argument('--visitMappingFile', type=str, required=True,
+    parser.add_argument('--repo', type=str, default='dp2_prep')
+    parser.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2')
+    parser.add_argument('--visitMappingFile', type=str, default='../data/visit_parquet_mapping_skycoord.pkl',
                         help='Path to visit_parquet_mapping_skycoord.pkl')
     parser.add_argument('--output', type=str, default='cosmos_stars_r.fits',
                         help='Output FITS file')
