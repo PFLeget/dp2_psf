@@ -29,6 +29,7 @@ PARQUET_COLUMNS = [
     'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
     'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
     'calib_psf_used', 'calib_psf_reserved',
+    'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
 ]
 
 
@@ -51,6 +52,10 @@ def load_visit_data(parquet_path):
     e1_psf = (iuu_psf - ivv_psf) / T_psf
     e2_psf = 2 * iuv_psf / T_psf
 
+    flux = table['base_GaussianFlux_instFlux'].to_numpy()
+    flux_err = table['base_GaussianFlux_instFluxErr'].to_numpy()
+    snr = flux / flux_err
+
     return {
         'ra': np.degrees(table['coord_ra'].to_numpy()),
         'dec': np.degrees(table['coord_dec'].to_numpy()),
@@ -58,6 +63,7 @@ def load_visit_data(parquet_path):
         'de2': e2_src - e2_psf,
         'calib_psf_used': table['calib_psf_used'].to_numpy(),
         'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
+        'snr': snr,
     }
 
 
@@ -72,6 +78,28 @@ def compute_rho1(data, treecorr_config):
     rho1.process(cat)
 
     return rho1
+
+
+def plot_snr_distribution(snr_used, snr_reserved, output_file, title, snr_bins):
+    """Plot SNR distribution for used vs reserved stars."""
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    ax.hist(snr_used, bins=snr_bins, color='b', alpha=0.5, edgecolor='b',
+            linewidth=0.5, label=f'Used ({len(snr_used):,})')
+    ax.hist(snr_reserved, bins=snr_bins, color='r', alpha=0.5, edgecolor='r',
+            linewidth=0.5, label=f'Reserved ({len(snr_reserved):,})')
+
+    ax.set_yscale('log')
+    ax.set_xlabel('SNR', fontsize=12)
+    ax.set_ylabel('# stars', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=150)
+    plt.close()
+    print(f"Saved: {output_file}")
 
 
 def plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
@@ -150,7 +178,7 @@ def main():
 
         butler = Butler(args.repo, collections=collection)
 
-        all_data = {k: [] for k in ['ra', 'dec', 'de1', 'de2', 'calib_psf_used', 'calib_psf_reserved']}
+        all_data = {k: [] for k in ['ra', 'dec', 'de1', 'de2', 'calib_psf_used', 'calib_psf_reserved', 'snr']}
         n_loaded = 0
 
         for visit in tqdm(visits, desc=f"Loading visits (poly={poly_order})"):
@@ -195,11 +223,19 @@ def main():
         rho1_used = compute_rho1(data_used, treecorr_config)
         rho1_reserved = compute_rho1(data_reserved, treecorr_config)
 
-        # Plot
+        # Plot rho1
         output_file = os.path.join(args.repOut, f'rho1_Polynomial_{poly_order}.png')
         title = f"Polynomial order {poly_order} | {n_loaded} visits"
         plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
                   n_all, n_used, n_reserved)
+
+        # Plot SNR distribution
+        snr_used = all_data['snr'][used_mask]
+        snr_reserved = all_data['snr'][reserved_mask]
+        snr_bins = np.linspace(0, 1000, 51)
+        output_file_snr = os.path.join(args.repOut, f'snr_dist_Polynomial_{poly_order}.png')
+        title_snr = f"SNR Distribution | Polynomial order {poly_order} | {n_loaded} visits"
+        plot_snr_distribution(snr_used, snr_reserved, output_file_snr, title_snr, snr_bins)
 
 
 if __name__ == "__main__":
