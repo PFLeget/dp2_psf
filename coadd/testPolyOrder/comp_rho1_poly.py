@@ -82,14 +82,14 @@ def plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
     theta = rho1_all.meanr
 
     ax.errorbar(theta, rho1_all.xip, yerr=np.sqrt(rho1_all.varxip),
-                fmt='o-', capsize=2, markersize=4, color='blue',
-                label=f'All ({n_all:,})')
+                fmt='o-', capsize=2, markersize=4, color='k',
+                label=f'All')
     ax.errorbar(theta, rho1_used.xip, yerr=np.sqrt(rho1_used.varxip),
-                fmt='s-', capsize=2, markersize=4, color='green',
-                label=f'Used ({n_used:,})')
+                fmt='s-', capsize=2, markersize=4, color='b',
+                label=f'Used')
     ax.errorbar(theta, rho1_reserved.xip, yerr=np.sqrt(rho1_reserved.varxip),
-                fmt='^-', capsize=2, markersize=4, color='red',
-                label=f'Reserved ({n_reserved:,})')
+                fmt='^-', capsize=2, markersize=4, color='r',
+                label=f'Reserved')
 
     ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
     ax.axvline(CCD_SCALE, color='k', linestyle='--', alpha=0.7, label='CCD scale')
@@ -102,7 +102,7 @@ def plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
     ax.set_ylabel(r'$\rho_1(\theta) = \langle \delta e, \delta e \rangle$', fontsize=12)
     ax.set_title(title, fontsize=14)
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='best', fontsize=10)
+    ax.legend(loc=4, fontsize=10)
 
     plt.tight_layout()
     plt.savefig(output_file, dpi=150)
@@ -119,7 +119,7 @@ def main():
     parser.add_argument('--repOut', type=str, default='plots/')
     parser.add_argument('--min_sep', type=float, default=0.1, help='Min separation in arcmin')
     parser.add_argument('--max_sep', type=float, default=300.0, help='Max separation in arcmin')
-    parser.add_argument('--nbins', type=int, default=30, help='Number of separation bins')
+    parser.add_argument('--nbins', type=int, default=20, help='Number of separation bins')
     parser.add_argument('--ylim_min', type=float, default=-1e-4)
     parser.add_argument('--ylim_max', type=float, default=1e-4)
 
