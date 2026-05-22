@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """
 Compare coadd second moments between two collections.
-Side-by-side sky plots (A | B | diff) for the same tracts.
+Creates 3 separate plots (A, B, diff) with fixed xlim/ylim.
+Only loads tracts that exist in both collections.
 """
 
 import numpy as np
@@ -86,32 +87,6 @@ def get_tracts_from_collection(butler, collection):
     return tracts
 
 
-def load_collection_data(butler, collection, tracts, band, bin_spacing):
-    """Load data from a collection for specified tracts and compute HEALPix binned statistics."""
-    meanify_obj = treegp.meanify_healpix(bin_spacing=bin_spacing)
-
-    n_loaded = 0
-    for tract in tqdm(tracts, desc=f"Loading {collection[:30]}..."):
-        try:
-            uri = butler.getURI("object_all", instrument="LSSTCam",
-                               skymap="lsst_cells_v2", tract=tract,
-                               collections=collection)
-            data = load_tract_data(uri.geturl(), band)
-
-            if len(data['ra']) == 0:
-                continue
-
-            coord = np.array([data['ra'], data['dec']]).T
-            valid = np.isfinite(data['dT_T']) & np.isfinite(data['de1']) & np.isfinite(data['de2'])
-
-            if np.sum(valid) > 0:
-                n_loaded += 1
-        except Exception as e:
-            pass
-
-    return meanify_obj, n_loaded
-
-
 def process_collection(butler, collection, tracts, band, key, bin_spacing):
     """Process a collection and return HEALPix map data."""
     meanify_obj = treegp.meanify_healpix(bin_spacing=bin_spacing)
@@ -150,9 +125,26 @@ def process_collection(butler, collection, tracts, band, key, bin_spacing):
     }
 
 
-def plot_comparison(result_A, result_B, key, band, label_A, label_B, repOutPlot, colorScale=0.005):
-    """Create side-by-side comparison plot (A | B | diff)."""
-    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+def compute_extent(result_A, result_B):
+    """Compute common extent (xlim, ylim) from both results."""
+    # Get all RA/Dec from both results
+    all_ra = np.concatenate([result_A['coords0'][:, 0], result_B['coords0'][:, 0]])
+    all_dec = np.concatenate([result_A['coords0'][:, 1], result_B['coords0'][:, 1]])
+
+    ra_min, ra_max = np.nanmin(all_ra), np.nanmax(all_ra)
+    dec_min, dec_max = np.nanmin(all_dec), np.nanmax(all_dec)
+
+    # Add small margin
+    ra_margin = (ra_max - ra_min) * 0.05
+    dec_margin = (dec_max - dec_min) * 0.05
+
+    return (ra_max + ra_margin, ra_min - ra_margin), (dec_min - dec_margin, dec_max + dec_margin)
+
+
+def plot_single_map(result, key, band, label, repOutPlot, colorScale, xlim, ylim, suffix):
+    """Create a single sky map plot."""
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111)
 
     CMAP = plt.cm.seismic
     vmin, vmax = -colorScale, colorScale
@@ -164,22 +156,53 @@ def plot_comparison(result_A, result_B, key, band, label_A, label_B, repOutPlot,
     }
     ksm = key_labels.get(key, key)
 
-    # Build HEALPix maps
-    nside_A = result_A['nside']
-    nside_B = result_B['nside']
-
-    # Use same nside (should be the same)
-    nside = nside_A
+    # Build HEALPix map
+    nside = result['nside']
     npix = hpg.nside_to_npixel(nside)
+    healpix_map = np.full(npix, hpg.UNSEEN)
+    healpix_map[result['valid_pixels']] = result['params0']
 
-    map_A = np.full(npix, hpg.UNSEEN)
-    map_B = np.full(npix, hpg.UNSEEN)
+    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
+    sp.draw_hpxmap(healpix_map, nest=True, zoom=False, vmin=vmin, vmax=vmax, cmap=CMAP)
 
-    map_A[result_A['valid_pixels']] = result_A['params0']
-    map_B[result_B['valid_pixels']] = result_B['params0']
+    # Set fixed extent
+    sp.ax.set_xlim(xlim)
+    sp.ax.set_ylim(ylim)
 
-    # Difference map (only where both have data)
+    sp.draw_colorbar(label=ksm, fontsize=14)
+    ax.set_title(f"{label}\n{band}-band | N_tracts={result['n_tracts']} | N_stars={result['n_stars']:,}",
+                 fontsize=14)
+
+    plt.tight_layout()
+
+    os.makedirs(repOutPlot, exist_ok=True)
+    output_file = os.path.join(repOutPlot, f'compare_coadd_{key}_{band}_{suffix}.png')
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {output_file}")
+
+
+def plot_difference_map(result_A, result_B, key, band, label_A, label_B, repOutPlot, colorScale, xlim, ylim):
+    """Create difference map plot."""
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111)
+
+    CMAP = plt.cm.seismic
+    diff_scale = colorScale / 2
+
+    key_labels = {
+        'dT_T': r'$\delta T / T$',
+        'de1': r'$\delta e_1$',
+        'de2': r'$\delta e_2$',
+    }
+    ksm = key_labels.get(key, key)
+
+    # Build difference HEALPix map
+    nside = result_A['nside']
+    npix = hpg.nside_to_npixel(nside)
     map_diff = np.full(npix, hpg.UNSEEN)
+
+    # Find common pixels
     common_pixels = np.intersect1d(result_A['valid_pixels'], result_B['valid_pixels'])
 
     # Create index mapping for params0
@@ -189,50 +212,24 @@ def plot_comparison(result_A, result_B, key, band, label_A, label_B, repOutPlot,
     for pix in common_pixels:
         map_diff[pix] = result_B['params0'][idx_B[pix]] - result_A['params0'][idx_A[pix]]
 
-    # Plot A
-    ax = axes[0]
-    sp_A = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
-    sp_A.draw_hpxmap(map_A, nest=True, zoom=True, vmin=vmin, vmax=vmax, cmap=CMAP)
-    sp_A.draw_colorbar(label=ksm, fontsize=12)
-    ax.set_title(f"{label_A}\n(N_tracts={result_A['n_tracts']}, N_stars={result_A['n_stars']:,})", fontsize=12)
+    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
+    sp.draw_hpxmap(map_diff, nest=True, zoom=False, vmin=-diff_scale, vmax=diff_scale, cmap=CMAP)
 
-    # Plot B
-    ax = axes[1]
-    sp_B = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
-    sp_B.draw_hpxmap(map_B, nest=True, zoom=True, vmin=vmin, vmax=vmax, cmap=CMAP)
-    sp_B.draw_colorbar(label=ksm, fontsize=12)
-    ax.set_title(f"{label_B}\n(N_tracts={result_B['n_tracts']}, N_stars={result_B['n_stars']:,})", fontsize=12)
+    # Set fixed extent
+    sp.ax.set_xlim(xlim)
+    sp.ax.set_ylim(ylim)
 
-    # Plot diff
-    ax = axes[2]
-    sp_diff = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
-    diff_scale = colorScale / 2
-    sp_diff.draw_hpxmap(map_diff, nest=True, zoom=True, vmin=-diff_scale, vmax=diff_scale, cmap=CMAP)
-    sp_diff.draw_colorbar(label=f'{ksm} (B - A)', fontsize=12)
-    ax.set_title(f"Difference (B - A)\n(N_common_pixels={len(common_pixels)})", fontsize=12)
+    sp.draw_colorbar(label=f'{ksm} (B - A)', fontsize=14)
+    ax.set_title(f"Difference: {label_B} - {label_A}\n{band}-band | N_common_pixels={len(common_pixels)}",
+                 fontsize=14)
 
-    plt.suptitle(f"Coadd {ksm} comparison | {band}-band", fontsize=14, fontweight='bold')
     plt.tight_layout()
 
     os.makedirs(repOutPlot, exist_ok=True)
-    output_file = os.path.join(repOutPlot, f'compare_coadd_{key}_{band}.png')
+    output_file = os.path.join(repOutPlot, f'compare_coadd_{key}_{band}_diff.png')
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Saved: {output_file}")
-
-    # Save results
-    results = {
-        'A': result_A,
-        'B': result_B,
-        'collection_A': label_A,
-        'collection_B': label_B,
-        'key': key,
-        'band': band,
-    }
-    pkl_file = os.path.join(repOutPlot, f'compare_coadd_{key}_{band}.pkl')
-    with open(pkl_file, 'wb') as f:
-        pickle.dump(results, f)
-    print(f"Saved: {pkl_file}")
 
 
 def main():
@@ -242,7 +239,7 @@ def main():
                         default='LSSTCam/runs/DRP/DP2/v30_0_6_rc1/DM-53881/stage3',
                         help='Collection A (reference)')
     parser.add_argument('--collection_B', type=str,
-                        default='u/mullaney/DM-54957_subregion',
+                        default='u/mullaney/DM-54957_subregion/20260521T063810Z',
                         help='Collection B (test)')
     parser.add_argument('--label_A', type=str, default='DP2 v30_0_6_rc1',
                         help='Label for collection A')
@@ -252,7 +249,7 @@ def main():
     parser.add_argument('--key', type=str, default='dT_T',
                         choices=['dT_T', 'de1', 'de2'],
                         help='Second moment key to plot')
-    parser.add_argument('--bin_spacing', type=float, default=120,
+    parser.add_argument('--bin_spacing', type=float, default=3600,
                         help='HEALPix bin spacing in arcsec')
     parser.add_argument('--colorScale', type=float, default=0.005,
                         help='Color scale for plots')
@@ -267,24 +264,59 @@ def main():
 
     butler = Butler(args.repo)
 
-    # Get tracts from collection B (the smaller one)
-    print(f"\nQuerying tracts from collection B...")
-    tracts = get_tracts_from_collection(butler, args.collection_B)
-    print(f"Found {len(tracts)} tracts in collection B")
+    # Get tracts from both collections and find intersection
+    print(f"\nQuerying tracts from both collections...")
+    tracts_A = set(get_tracts_from_collection(butler, args.collection_A))
+    tracts_B = set(get_tracts_from_collection(butler, args.collection_B))
+    common_tracts = sorted(tracts_A & tracts_B)
+    print(f"  Collection A: {len(tracts_A)} tracts")
+    print(f"  Collection B: {len(tracts_B)} tracts")
+    print(f"  Intersection: {len(common_tracts)} tracts")
 
-    # Process both collections
+    if len(common_tracts) == 0:
+        print("No common tracts found!")
+        return
+
+    # Process both collections (only common tracts)
     print(f"\nProcessing collection A...")
-    result_A = process_collection(butler, args.collection_A, tracts, args.band,
+    result_A = process_collection(butler, args.collection_A, common_tracts, args.band,
                                    args.key, args.bin_spacing)
 
     print(f"\nProcessing collection B...")
-    result_B = process_collection(butler, args.collection_B, tracts, args.band,
+    result_B = process_collection(butler, args.collection_B, common_tracts, args.band,
                                    args.key, args.bin_spacing)
 
-    # Plot comparison
-    print(f"\nCreating comparison plot...")
-    plot_comparison(result_A, result_B, args.key, args.band,
-                    args.label_A, args.label_B, args.repOutPlot, args.colorScale)
+    # Compute common extent
+    xlim, ylim = compute_extent(result_A, result_B)
+    print(f"\nFixed extent: xlim={xlim}, ylim={ylim}")
+
+    # Create 3 separate plots with same extent
+    print(f"\nCreating plots...")
+    plot_single_map(result_A, args.key, args.band, args.label_A, args.repOutPlot,
+                    args.colorScale, xlim, ylim, 'A')
+    plot_single_map(result_B, args.key, args.band, args.label_B, args.repOutPlot,
+                    args.colorScale, xlim, ylim, 'B')
+    plot_difference_map(result_A, result_B, args.key, args.band,
+                        args.label_A, args.label_B, args.repOutPlot, args.colorScale, xlim, ylim)
+
+    # Save results
+    results = {
+        'A': result_A,
+        'B': result_B,
+        'collection_A': args.collection_A,
+        'collection_B': args.collection_B,
+        'label_A': args.label_A,
+        'label_B': args.label_B,
+        'key': args.key,
+        'band': args.band,
+        'common_tracts': common_tracts,
+        'xlim': xlim,
+        'ylim': ylim,
+    }
+    pkl_file = os.path.join(args.repOutPlot, f'compare_coadd_{args.key}_{args.band}.pkl')
+    with open(pkl_file, 'wb') as f:
+        pickle.dump(results, f)
+    print(f"Saved: {pkl_file}")
 
 
 if __name__ == "__main__":
