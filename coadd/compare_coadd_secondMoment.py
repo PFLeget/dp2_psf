@@ -23,13 +23,7 @@ import argparse
 
 from lsst.daf.butler import Butler
 
-from skyproj import McBrydeSkyproj
-from skyproj.survey import _Survey
-
-
-class SurveyMcBrydeSkyproj(_Survey, McBrydeSkyproj):
-    """McBryde projection with survey footprint drawing capabilities."""
-    pass
+from skyproj import GnomonicSkyproj
 
 
 def get_parquet_columns(band):
@@ -126,7 +120,7 @@ def process_collection(butler, collection, tracts, band, key, bin_spacing):
 
 
 def compute_extent(result_A, result_B):
-    """Compute common extent (xlim, ylim) from both results."""
+    """Compute common extent [lon_min, lon_max, lat_min, lat_max] from both results."""
     # Get all RA/Dec from both results
     all_ra = np.concatenate([result_A['coords0'][:, 0], result_B['coords0'][:, 0]])
     all_dec = np.concatenate([result_A['coords0'][:, 1], result_B['coords0'][:, 1]])
@@ -135,13 +129,21 @@ def compute_extent(result_A, result_B):
     dec_min, dec_max = np.nanmin(all_dec), np.nanmax(all_dec)
 
     # Add small margin
-    ra_margin = (ra_max - ra_min) * 0.05
-    dec_margin = (dec_max - dec_min) * 0.05
+    ra_margin = (ra_max - ra_min) * 0.1
+    dec_margin = (dec_max - dec_min) * 0.1
 
-    return (ra_max + ra_margin, ra_min - ra_margin), (dec_min - dec_margin, dec_max + dec_margin)
+    # Return as [lon_min, lon_max, lat_min, lat_max] for set_extent
+    return [ra_min - ra_margin, ra_max + ra_margin, dec_min - dec_margin, dec_max + dec_margin]
 
 
-def plot_single_map(result, key, band, label, repOutPlot, colorScale, xlim, ylim, suffix):
+def compute_center(extent):
+    """Compute center (lon_0, lat_0) from extent."""
+    lon_0 = (extent[0] + extent[1]) / 2
+    lat_0 = (extent[2] + extent[3]) / 2
+    return lon_0, lat_0
+
+
+def plot_single_map(result, key, band, label, repOutPlot, colorScale, extent, lon_0, lat_0, suffix):
     """Create a single sky map plot."""
     fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(111)
@@ -162,12 +164,10 @@ def plot_single_map(result, key, band, label, repOutPlot, colorScale, xlim, ylim
     healpix_map = np.full(npix, hpg.UNSEEN)
     healpix_map[result['valid_pixels']] = result['params0']
 
-    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
+    sp = GnomonicSkyproj(ax=ax, lon_0=lon_0, lat_0=lat_0)
+    sp.set_extent(extent)
     sp.draw_hpxmap(healpix_map, nest=True, zoom=False, vmin=vmin, vmax=vmax, cmap=CMAP)
-
-    # Set fixed extent
-    sp.ax.set_xlim(xlim)
-    sp.ax.set_ylim(ylim)
+    sp.set_extent(extent)
 
     sp.draw_colorbar(label=ksm, fontsize=14)
     ax.set_title(f"{label}\n{band}-band | N_tracts={result['n_tracts']} | N_stars={result['n_stars']:,}",
@@ -182,7 +182,7 @@ def plot_single_map(result, key, band, label, repOutPlot, colorScale, xlim, ylim
     print(f"Saved: {output_file}")
 
 
-def plot_difference_map(result_A, result_B, key, band, label_A, label_B, repOutPlot, colorScale, xlim, ylim):
+def plot_difference_map(result_A, result_B, key, band, label_A, label_B, repOutPlot, colorScale, extent, lon_0, lat_0):
     """Create difference map plot."""
     fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(111)
@@ -212,12 +212,10 @@ def plot_difference_map(result_A, result_B, key, band, label_A, label_B, repOutP
     for pix in common_pixels:
         map_diff[pix] = result_B['params0'][idx_B[pix]] - result_A['params0'][idx_A[pix]]
 
-    sp = SurveyMcBrydeSkyproj(ax=ax, lon_0=0.0)
+    sp = GnomonicSkyproj(ax=ax, lon_0=lon_0, lat_0=lat_0)
+    sp.set_extent(extent)
     sp.draw_hpxmap(map_diff, nest=True, zoom=False, vmin=-diff_scale, vmax=diff_scale, cmap=CMAP)
-
-    # Set fixed extent
-    sp.ax.set_xlim(xlim)
-    sp.ax.set_ylim(ylim)
+    sp.set_extent(extent)
 
     sp.draw_colorbar(label=f'{ksm} (B - A)', fontsize=14)
     ax.set_title(f"Difference: {label_B} - {label_A}\n{band}-band | N_common_pixels={len(common_pixels)}",
@@ -286,18 +284,20 @@ def main():
     result_B = process_collection(butler, args.collection_B, common_tracts, args.band,
                                    args.key, args.bin_spacing)
 
-    # Compute common extent
-    xlim, ylim = compute_extent(result_A, result_B)
-    print(f"\nFixed extent: xlim={xlim}, ylim={ylim}")
+    # Compute common extent and center
+    extent = compute_extent(result_A, result_B)
+    lon_0, lat_0 = compute_center(extent)
+    print(f"\nFixed extent: {extent}")
+    print(f"Center: lon_0={lon_0:.2f}, lat_0={lat_0:.2f}")
 
     # Create 3 separate plots with same extent
     print(f"\nCreating plots...")
     plot_single_map(result_A, args.key, args.band, args.label_A, args.repOutPlot,
-                    args.colorScale, xlim, ylim, 'A')
+                    args.colorScale, extent, lon_0, lat_0, 'A')
     plot_single_map(result_B, args.key, args.band, args.label_B, args.repOutPlot,
-                    args.colorScale, xlim, ylim, 'B')
+                    args.colorScale, extent, lon_0, lat_0, 'B')
     plot_difference_map(result_A, result_B, args.key, args.band,
-                        args.label_A, args.label_B, args.repOutPlot, args.colorScale, xlim, ylim)
+                        args.label_A, args.label_B, args.repOutPlot, args.colorScale, extent, lon_0, lat_0)
 
     # Save results
     results = {
@@ -310,8 +310,9 @@ def main():
         'key': args.key,
         'band': args.band,
         'common_tracts': common_tracts,
-        'xlim': xlim,
-        'ylim': ylim,
+        'extent': extent,
+        'lon_0': lon_0,
+        'lat_0': lat_0,
     }
     pkl_file = os.path.join(args.repOutPlot, f'compare_coadd_{args.key}_{args.band}.pkl')
     with open(pkl_file, 'wb') as f:
