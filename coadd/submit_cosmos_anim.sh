@@ -74,6 +74,7 @@ echo "=============================================="
 FRAMES_DIR="${OUTPUT_DIR}/cosmos_frames_${BAND}_distortion"
 if [ -d "${FRAMES_DIR}" ]; then
     ffmpeg -y -framerate 5 -i ${FRAMES_DIR}/frame_%04d.png \
+        -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" \
         -c:v libx264 -pix_fmt yuv420p \
         ${OUTPUT_DIR}/cosmos_rho_anim_${BAND}.mp4
     echo "Animation saved: ${OUTPUT_DIR}/cosmos_rho_anim_${BAND}.mp4"

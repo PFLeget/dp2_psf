@@ -147,34 +147,55 @@ def compute_size(ixx, iyy, ixy, size_type='trace'):
         return np.sqrt(ixx * iyy - ixy**2)
 
 
-def load_coadd_data(parquet_path, band):
-    """Load coadd data for a single tract."""
-    columns = [
-        f"{band}_calib_psf_used", "detect_isPrimary", "refExtendedness",
-        f"{band}_pixelFlags_inexact_psfCenter",
-        f"{band}_ixxPSF", f"{band}_iyyPSF", f"{band}_ixyPSF",
-        f"{band}_ixx", f"{band}_iyy", f"{band}_ixy",
-        f"{band}_ra", f"{band}_dec",
-    ]
+def load_coadd_data(parquet_path, bands):
+    """Load coadd data for a single tract, combining multiple bands.
 
-    table = polars.scan_parquet(parquet_path).select(columns).collect()
+    Parameters
+    ----------
+    parquet_path : str
+        Path to parquet file
+    bands : str
+        Band(s) to load (e.g., 'r', 'riz')
+    """
+    all_data = {k: [] for k in ['ixx', 'iyy', 'ixy', 'ixx_psf', 'iyy_psf', 'ixy_psf', 'ra', 'dec']}
 
-    # Quality filters
-    mask = table['detect_isPrimary'].to_numpy() == True
-    mask &= table['refExtendedness'].to_numpy() == 0.0
-    mask &= table[f'{band}_calib_psf_used'].to_numpy() == True
-    mask &= table[f'{band}_pixelFlags_inexact_psfCenter'].to_numpy() == False
+    for band in bands:
+        columns = [
+            f"{band}_calib_psf_used", "detect_isPrimary", "refExtendedness",
+            f"{band}_pixelFlags_inexact_psfCenter",
+            f"{band}_ixxPSF", f"{band}_iyyPSF", f"{band}_ixyPSF",
+            f"{band}_ixx", f"{band}_iyy", f"{band}_ixy",
+            f"{band}_ra", f"{band}_dec",
+        ]
 
-    return {
-        'ixx': table[f"{band}_ixx"].to_numpy()[mask],
-        'iyy': table[f"{band}_iyy"].to_numpy()[mask],
-        'ixy': table[f"{band}_ixy"].to_numpy()[mask],
-        'ixx_psf': table[f"{band}_ixxPSF"].to_numpy()[mask],
-        'iyy_psf': table[f"{band}_iyyPSF"].to_numpy()[mask],
-        'ixy_psf': table[f"{band}_ixyPSF"].to_numpy()[mask],
-        'ra': table[f"{band}_ra"].to_numpy()[mask],
-        'dec': table[f"{band}_dec"].to_numpy()[mask],
-    }
+        try:
+            table = polars.scan_parquet(parquet_path).select(columns).collect()
+        except Exception:
+            continue
+
+        # Quality filters
+        mask = table['detect_isPrimary'].to_numpy() == True
+        mask &= table['refExtendedness'].to_numpy() == 0.0
+        mask &= table[f'{band}_calib_psf_used'].to_numpy() == True
+        mask &= table[f'{band}_pixelFlags_inexact_psfCenter'].to_numpy() == False
+
+        all_data['ixx'].append(table[f"{band}_ixx"].to_numpy()[mask])
+        all_data['iyy'].append(table[f"{band}_iyy"].to_numpy()[mask])
+        all_data['ixy'].append(table[f"{band}_ixy"].to_numpy()[mask])
+        all_data['ixx_psf'].append(table[f"{band}_ixxPSF"].to_numpy()[mask])
+        all_data['iyy_psf'].append(table[f"{band}_iyyPSF"].to_numpy()[mask])
+        all_data['ixy_psf'].append(table[f"{band}_ixyPSF"].to_numpy()[mask])
+        all_data['ra'].append(table[f"{band}_ra"].to_numpy()[mask])
+        all_data['dec'].append(table[f"{band}_dec"].to_numpy()[mask])
+
+    # Concatenate all bands
+    for k in all_data:
+        if all_data[k]:
+            all_data[k] = np.concatenate(all_data[k])
+        else:
+            all_data[k] = np.array([])
+
+    return all_data
 
 
 def load_single_visit_data(parquet_path, coadd_detectors=None):
@@ -475,11 +496,11 @@ def replot_from_pkl(pkl_file, output_file=None, title=None, ylims=None, des_file
     plot_rho_statistics(rho_stats, output_file, title=title, ylims=ylims, des_rho=des_rho)
 
 
-def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None,
+def run_coadd(bands, tractMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_tracts=None,
               npatch=25, patch_centers=None, ellipticity_type='distortion',
               min_sep=0.1, max_sep=900.0, nbins=40):
     """Run rho statistics on coadd data."""
-    print(f"Computing rho statistics for COADD, band={band}, ellipticity_type={ellipticity_type}")
+    print(f"Computing rho statistics for COADD, bands={bands}, ellipticity_type={ellipticity_type}")
     print(f"  Angular bins: {nbins} bins from {min_sep} to {max_sep} arcmin")
 
     with open(tractMappingFile, 'rb') as f:
@@ -496,9 +517,10 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
 
     for tract, info in tqdm(tract_items, desc="Loading tracts"):
         try:
-            data = load_coadd_data(info['parquet_path'], band)
+            data = load_coadd_data(info['parquet_path'], bands)
             for k in all_data:
-                all_data[k].append(data[k])
+                if len(data[k]) > 0:
+                    all_data[k].append(data[k])
         except Exception as e:
             print(f"  Warning: failed tract {tract}: {e}")
 
@@ -534,7 +556,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
     }
 
     # Build suffix for output files
-    suffix = f'coadd_{band}_{ellipticity_type}'
+    suffix = f'coadd_{bands}_{ellipticity_type}'
 
     # Compute rho stats with consistent patch centers
     os.makedirs(repOut, exist_ok=True)
@@ -561,7 +583,7 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
                               'varxip': v.varxip if hasattr(v, 'varxip') else v.varxi,
                               'npairs': v.npairs}
                          for k, v in rho_stats.items()},
-            'band': band,
+            'bands': bands,
             'n_sources': len(inputs['ra']),
             'treecorr_config': treecorr_config,
             'patch_centers_file': patch_centers_file,
@@ -571,14 +593,14 @@ def run_coadd(band, tractMappingFile, repOut, exclude_crowded=True, galactic_b_m
 
     # Plot
     output_plot = os.path.join(repOut, f'rho_stats_{suffix}.png')
-    plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Coadd {band}-band ({ellipticity_type})")
+    plot_rho_statistics(rho_stats, output_plot, title=f"Rho Statistics - Coadd {bands}-band ({ellipticity_type})")
 
 
-def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None,
+def run_single_visit(bands, visitMappingFile, repOut, exclude_crowded=True, galactic_b_min=25., max_visits=None,
                      npatch=25, patch_centers=None, coaddDetectorFile=None, ellipticity_type='distortion',
                      min_sep=0.1, max_sep=900.0, nbins=40):
     """Run rho statistics on single visit data."""
-    print(f"Computing rho statistics for SINGLE VISIT, band={band}, ellipticity_type={ellipticity_type}")
+    print(f"Computing rho statistics for SINGLE VISIT, bands={bands}, ellipticity_type={ellipticity_type}")
     print(f"  Angular bins: {nbins} bins from {min_sep} to {max_sep} arcmin")
 
     with open(visitMappingFile, 'rb') as f:
@@ -591,14 +613,14 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
             coadd_detector_mapping = pickle.load(f)
         print(f"  Loaded coadd detector mapping: {len(coadd_detector_mapping)} visits")
 
-    # Filter by band
-    selected_visits = [(v, info) for v, info in visit_mapping.items() if info['band'] == band]
+    # Filter by bands
+    selected_visits = [(v, info) for v, info in visit_mapping.items() if info['band'] in bands]
 
     # Limit number of visits for testing
     if max_visits is not None and len(selected_visits) > max_visits:
         selected_visits = selected_visits[:max_visits]
 
-    print(f"  Loading {len(selected_visits)} visits for band {band}...")
+    print(f"  Loading {len(selected_visits)} visits for bands {bands}...")
 
     all_data = {k: [] for k in ['ixx', 'iyy', 'ixy', 'ixx_psf', 'iyy_psf', 'ixy_psf', 'ra', 'dec']}
 
@@ -654,7 +676,7 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
     }
 
     # Build suffix for output files
-    suffix = f'single_visit_{band}_{ellipticity_type}'
+    suffix = f'single_visit_{bands}_{ellipticity_type}'
     if coaddDetectorFile is not None:
         suffix += '_coaddOnly'
 
@@ -683,7 +705,7 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
                               'varxip': v.varxip if hasattr(v, 'varxip') else v.varxi,
                               'npairs': v.npairs}
                          for k, v in rho_stats.items()},
-            'band': band,
+            'bands': bands,
             'n_sources': len(inputs['ra']),
             'n_visits': len(selected_visits) - n_skipped_no_coadd,
             'treecorr_config': treecorr_config,
@@ -694,7 +716,7 @@ def run_single_visit(band, visitMappingFile, repOut, exclude_crowded=True, galac
     print(f"Saved summary: {output_pkl}")
 
     # Plot
-    title = f"Rho Statistics - Single Visit {band}-band ({ellipticity_type})"
+    title = f"Rho Statistics - Single Visit {bands}-band ({ellipticity_type})"
     if coaddDetectorFile is not None:
         title += " (coadd detectors only)"
     output_plot = os.path.join(repOut, f'rho_stats_{suffix}.png')
@@ -705,7 +727,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compute Rho statistics for PSF modeling")
     parser.add_argument('--mode', type=str, required=True, choices=['coadd', 'single_visit', 'replot'],
                         help='Data mode: coadd, single_visit, or replot')
-    parser.add_argument('--band', type=str, default=None, help='Band to process (u, g, r, i, z, y)')
+    parser.add_argument('--band', type=str, default=None, help='Band(s) to process (e.g., r, riz, ugrizy)')
     parser.add_argument('--tractMappingFile', type=str, default=None,
                         help='Path to tract_parquet_mapping.pkl (for coadd)')
     parser.add_argument('--visitMappingFile', type=str, default=None,
