@@ -227,7 +227,7 @@ def plot_difference_map(result_A, result_B, key, band, label_A, label_B, repOutP
 
     os.makedirs(repOutPlot, exist_ok=True)
     output_file = os.path.join(repOutPlot, f'compare_coadd_{key}_{band}_diff.png')
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.savefig(output_file, dpi=150)
     plt.close()
     print(f"Saved: {output_file}")
 
