@@ -177,7 +177,7 @@ def plot_single_map(result, key, band, label, repOutPlot, colorScale, xlim, ylim
 
     os.makedirs(repOutPlot, exist_ok=True)
     output_file = os.path.join(repOutPlot, f'compare_coadd_{key}_{band}_{suffix}.png')
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.savefig(output_file, dpi=150)
     plt.close()
     print(f"Saved: {output_file}")
 
