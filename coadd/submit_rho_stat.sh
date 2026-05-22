@@ -35,7 +35,7 @@ sbatch --job-name=rho_coadd_dist \
     --time=12:00:00 \
     --output=logs/rho_coadd_dist_%j.out \
     --error=logs/rho_coadd_dist_%j.err \
-    --wrap="source /sdf/group/rubin/sw/tag/w_2024_22/loadLSST.bash && setup lsst_distrib && \
+    --wrap="source /sdf/group/rubin/sw/d_latest/loadLSST.bash && setup lsst_distrib -t d_latest && \
 python ${SCRIPT_DIR}/comp_rho_stat.py \
     --mode coadd \
     --band ${BANDS} \
@@ -57,7 +57,7 @@ sbatch --job-name=rho_coadd_shear \
     --time=12:00:00 \
     --output=logs/rho_coadd_shear_%j.out \
     --error=logs/rho_coadd_shear_%j.err \
-    --wrap="source /sdf/group/rubin/sw/tag/w_2024_22/loadLSST.bash && setup lsst_distrib && \
+    --wrap="source /sdf/group/rubin/sw/d_latest/loadLSST.bash && setup lsst_distrib -t d_latest && \
 python ${SCRIPT_DIR}/comp_rho_stat.py \
     --mode coadd \
     --band ${BANDS} \
@@ -79,7 +79,7 @@ sbatch --job-name=rho_sv_dist \
     --time=24:00:00 \
     --output=logs/rho_sv_dist_%j.out \
     --error=logs/rho_sv_dist_%j.err \
-    --wrap="source /sdf/group/rubin/sw/tag/w_2024_22/loadLSST.bash && setup lsst_distrib && \
+    --wrap="source /sdf/group/rubin/sw/d_latest/loadLSST.bash && setup lsst_distrib -t d_latest && \
 python ${SCRIPT_DIR}/comp_rho_stat.py \
     --mode single_visit \
     --band ${BANDS} \
@@ -101,7 +101,7 @@ sbatch --job-name=rho_sv_shear \
     --time=24:00:00 \
     --output=logs/rho_sv_shear_%j.out \
     --error=logs/rho_sv_shear_%j.err \
-    --wrap="source /sdf/group/rubin/sw/tag/w_2024_22/loadLSST.bash && setup lsst_distrib && \
+    --wrap="source /sdf/group/rubin/sw/d_latest/loadLSST.bash && setup lsst_distrib -t d_latest && \
 python ${SCRIPT_DIR}/comp_rho_stat.py \
     --mode single_visit \
     --band ${BANDS} \
