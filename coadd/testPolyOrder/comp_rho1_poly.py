@@ -24,18 +24,42 @@ from lsst.daf.butler import Butler
 CCD_SCALE = 13.3  # arcmin
 FOCAL_PLANE_SCALE = 210.0  # arcmin
 
+# Detector types
+ITL_DETECTORS = np.concatenate((np.arange(0, 36), np.arange(72, 81), np.arange(162, 189)))
+E2V_DETECTORS = np.concatenate((np.arange(36, 72), np.arange(81, 162)))
+
 PARQUET_COLUMNS = [
     'coord_ra', 'coord_dec',
     'shape_Iuu', 'shape_Ivv', 'shape_Iuv',
     'psfShape_Iuu', 'psfShape_Ivv', 'psfShape_Iuv',
     'calib_psf_used', 'calib_psf_reserved',
     'base_GaussianFlux_instFlux', 'base_GaussianFlux_instFluxErr',
+    'detector',
 ]
 
 
-def load_visit_data(parquet_path):
-    """Load visit data from parquet file."""
+def load_visit_data(parquet_path, detector_filter=None):
+    """Load visit data from parquet file.
+
+    Parameters
+    ----------
+    parquet_path : str
+        Path to parquet file
+    detector_filter : str or None
+        'e2v', 'itl', or None (all detectors)
+    """
     table = polars.scan_parquet(parquet_path).select(PARQUET_COLUMNS).collect()
+
+    # Filter by detector type
+    if detector_filter is not None:
+        detector_col = table['detector'].to_numpy()
+        if detector_filter == 'e2v':
+            mask = np.isin(detector_col, E2V_DETECTORS)
+        elif detector_filter == 'itl':
+            mask = np.isin(detector_col, ITL_DETECTORS)
+        else:
+            raise ValueError(f"Unknown detector_filter: {detector_filter}")
+        table = table.filter(polars.Series(mask))
 
     iuu_src = table['shape_Iuu'].to_numpy()
     ivv_src = table['shape_Ivv'].to_numpy()
@@ -150,8 +174,13 @@ def main():
     parser.add_argument('--nbins', type=int, default=20, help='Number of separation bins')
     parser.add_argument('--ylim_min', type=float, default=-1e-4)
     parser.add_argument('--ylim_max', type=float, default=1e-4)
+    parser.add_argument('--detector_filter', type=str, default=None, choices=['e2v', 'itl'],
+                        help='Filter by detector type: e2v or itl')
 
     args = parser.parse_args()
+
+    det_str = f" ({args.detector_filter.upper()})" if args.detector_filter else ""
+    det_suffix = f"_{args.detector_filter}" if args.detector_filter else ""
 
     os.makedirs(args.repOut, exist_ok=True)
 
@@ -159,6 +188,7 @@ def main():
     with open(args.visit_file, 'r') as f:
         visits = [int(line.strip()) for line in f if line.strip()]
     print(f"Processing {len(visits)} visits")
+    print(f"Detector filter: {args.detector_filter if args.detector_filter else 'all'}")
 
     treecorr_config = {
         'sep_units': 'arcmin',
@@ -184,7 +214,7 @@ def main():
         for visit in tqdm(visits, desc=f"Loading visits (poly={poly_order})"):
             try:
                 uri = butler.getURI("refit_psf_star", instrument="LSSTCam", visit=visit)
-                data = load_visit_data(uri.geturl())
+                data = load_visit_data(uri.geturl(), detector_filter=args.detector_filter)
 
                 valid = np.isfinite(data['de1']) & np.isfinite(data['de2'])
                 for k in all_data:
@@ -224,8 +254,8 @@ def main():
         rho1_reserved = compute_rho1(data_reserved, treecorr_config)
 
         # Plot rho1
-        output_file = os.path.join(args.repOut, f'rho1_Polynomial_{poly_order}.png')
-        title = f"Polynomial order {poly_order} | {n_loaded} visits"
+        output_file = os.path.join(args.repOut, f'rho1_Polynomial_{poly_order}{det_suffix}.png')
+        title = f"Polynomial order {poly_order}{det_str} | {n_loaded} visits"
         plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
                   n_all, n_used, n_reserved)
 
@@ -233,8 +263,8 @@ def main():
         snr_used = all_data['snr'][used_mask]
         snr_reserved = all_data['snr'][reserved_mask]
         snr_bins = np.linspace(0, 1000, 51)
-        output_file_snr = os.path.join(args.repOut, f'snr_dist_Polynomial_{poly_order}.png')
-        title_snr = f"SNR Distribution | Polynomial order {poly_order} | {n_loaded} visits"
+        output_file_snr = os.path.join(args.repOut, f'snr_dist_Polynomial_{poly_order}{det_suffix}.png')
+        title_snr = f"SNR Distribution | Polynomial order {poly_order}{det_str} | {n_loaded} visits"
         plot_snr_distribution(snr_used, snr_reserved, output_file_snr, title_snr, snr_bins)
 
 
