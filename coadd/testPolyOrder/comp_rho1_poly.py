@@ -85,6 +85,7 @@ def load_visit_data(parquet_path, detector_filter=None):
         'dec': np.degrees(table['coord_dec'].to_numpy()),
         'de1': e1_src - e1_psf,
         'de2': e2_src - e2_psf,
+        'dT_T': (T_src - T_psf) / T_src,
         'calib_psf_used': table['calib_psf_used'].to_numpy(),
         'calib_psf_reserved': table['calib_psf_reserved'].to_numpy(),
         'snr': snr,
@@ -102,6 +103,19 @@ def compute_rho1(data, treecorr_config):
     rho1.process(cat)
 
     return rho1
+
+
+def compute_rho3alt(data, treecorr_config):
+    """Compute rho3alt = <dT/T, dT/T>."""
+    ra, dec = data['ra'], data['dec']
+    dT_T = data['dT_T']
+
+    cat = treecorr.Catalog(ra=ra, dec=dec, k=dT_T, ra_units='deg', dec_units='deg')
+
+    rho3alt = treecorr.KKCorrelation(config=treecorr_config)
+    rho3alt.process(cat)
+
+    return rho3alt
 
 
 def plot_snr_distribution(snr_used, snr_reserved, output_file, title, snr_bins):
@@ -162,6 +176,41 @@ def plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
     print(f"Saved: {output_file}")
 
 
+def plot_rho3alt(rho_all, rho_used, rho_reserved, output_file, title, ylim,
+                  n_all, n_used, n_reserved):
+    """Plot rho3alt (size correlation) for all, used, and reserved on same plot."""
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    theta = rho_all.meanr
+
+    ax.errorbar(theta, rho_all.xi, yerr=np.sqrt(rho_all.varxi),
+                fmt='o-', capsize=2, markersize=4, color='k',
+                label=f'All')
+    ax.errorbar(theta, rho_used.xi, yerr=np.sqrt(rho_used.varxi),
+                fmt='s-', capsize=2, markersize=4, color='b',
+                label=f'Used')
+    ax.errorbar(theta, rho_reserved.xi, yerr=np.sqrt(rho_reserved.varxi),
+                fmt='^-', capsize=2, markersize=4, color='r',
+                label=f'Reserved')
+
+    ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+    ax.axvline(CCD_SCALE, color='k', linestyle='--', alpha=0.7, label='CCD scale')
+    ax.axvline(FOCAL_PLANE_SCALE, color='k', linestyle=':', alpha=0.7, label='FoV scale')
+
+    ax.set_xscale('log')
+    ax.set_ylim(ylim)
+    ax.set_xlabel('Separation [arcmin]', fontsize=12)
+    ax.set_ylabel(r"$\rho'_3(\theta) = \langle \delta T/T, \delta T/T \rangle$", fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right', fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=150)
+    plt.close()
+    print(f"Saved: {output_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compute rho1 for polynomial order test")
     parser.add_argument('--repo', type=str, default='dp2_prep')
@@ -176,11 +225,15 @@ def main():
     parser.add_argument('--ylim_max', type=float, default=1e-4)
     parser.add_argument('--detector_filter', type=str, default=None, choices=['e2v', 'itl'],
                         help='Filter by detector type: e2v or itl')
+    parser.add_argument('--use_size', action='store_true',
+                        help='Compute <dT/T, dT/T> instead of <de, de>')
 
     args = parser.parse_args()
 
     det_str = f" ({args.detector_filter.upper()})" if args.detector_filter else ""
     det_suffix = f"_{args.detector_filter}" if args.detector_filter else ""
+    size_suffix = "_size" if args.use_size else ""
+    stat_name = "rho3alt" if args.use_size else "rho1"
 
     os.makedirs(args.repOut, exist_ok=True)
 
@@ -189,6 +242,7 @@ def main():
         visits = [int(line.strip()) for line in f if line.strip()]
     print(f"Processing {len(visits)} visits")
     print(f"Detector filter: {args.detector_filter if args.detector_filter else 'all'}")
+    print(f"Statistic: {'<dT/T, dT/T>' if args.use_size else '<de, de>'}")
 
     treecorr_config = {
         'sep_units': 'arcmin',
@@ -208,7 +262,7 @@ def main():
 
         butler = Butler(args.repo, collections=collection)
 
-        all_data = {k: [] for k in ['ra', 'dec', 'de1', 'de2', 'calib_psf_used', 'calib_psf_reserved', 'snr']}
+        all_data = {k: [] for k in ['ra', 'dec', 'de1', 'de2', 'dT_T', 'calib_psf_used', 'calib_psf_reserved', 'snr']}
         n_loaded = 0
 
         for visit in tqdm(visits, desc=f"Loading visits (poly={poly_order})"):
@@ -216,7 +270,7 @@ def main():
                 uri = butler.getURI("refit_psf_star", instrument="LSSTCam", visit=visit)
                 data = load_visit_data(uri.geturl(), detector_filter=args.detector_filter)
 
-                valid = np.isfinite(data['de1']) & np.isfinite(data['de2'])
+                valid = np.isfinite(data['de1']) & np.isfinite(data['de2']) & np.isfinite(data['dT_T'])
                 for k in all_data:
                     all_data[k].append(data[k][valid])
                 n_loaded += 1
@@ -237,9 +291,10 @@ def main():
         used_mask = all_data['calib_psf_used']
         reserved_mask = all_data['calib_psf_reserved']
 
-        data_all = {k: all_data[k] for k in ['ra', 'dec', 'de1', 'de2']}
-        data_used = {k: all_data[k][used_mask] for k in ['ra', 'dec', 'de1', 'de2']}
-        data_reserved = {k: all_data[k][reserved_mask] for k in ['ra', 'dec', 'de1', 'de2']}
+        data_keys = ['ra', 'dec', 'de1', 'de2', 'dT_T']
+        data_all = {k: all_data[k] for k in data_keys}
+        data_used = {k: all_data[k][used_mask] for k in data_keys}
+        data_reserved = {k: all_data[k][reserved_mask] for k in data_keys}
 
         n_all = len(data_all['ra'])
         n_used = len(data_used['ra'])
@@ -247,17 +302,27 @@ def main():
 
         print(f"  All: {n_all:,}, Used: {n_used:,}, Reserved: {n_reserved:,}")
 
-        # Compute rho1 for each subset
-        print("Computing rho1...")
-        rho1_all = compute_rho1(data_all, treecorr_config)
-        rho1_used = compute_rho1(data_used, treecorr_config)
-        rho1_reserved = compute_rho1(data_reserved, treecorr_config)
+        # Compute correlation for each subset
+        if args.use_size:
+            print("Computing rho3alt (<dT/T, dT/T>)...")
+            rho_all = compute_rho3alt(data_all, treecorr_config)
+            rho_used = compute_rho3alt(data_used, treecorr_config)
+            rho_reserved = compute_rho3alt(data_reserved, treecorr_config)
 
-        # Plot rho1
-        output_file = os.path.join(args.repOut, f'rho1_Polynomial_{poly_order}{det_suffix}.png')
-        title = f"Polynomial order {poly_order}{det_str} | {n_loaded} visits"
-        plot_rho1(rho1_all, rho1_used, rho1_reserved, output_file, title, ylim,
-                  n_all, n_used, n_reserved)
+            output_file = os.path.join(args.repOut, f'rho3alt_Polynomial_{poly_order}{det_suffix}.png')
+            title = f"Polynomial order {poly_order}{det_str} | {n_loaded} visits"
+            plot_rho3alt(rho_all, rho_used, rho_reserved, output_file, title, ylim,
+                         n_all, n_used, n_reserved)
+        else:
+            print("Computing rho1 (<de, de>)...")
+            rho_all = compute_rho1(data_all, treecorr_config)
+            rho_used = compute_rho1(data_used, treecorr_config)
+            rho_reserved = compute_rho1(data_reserved, treecorr_config)
+
+            output_file = os.path.join(args.repOut, f'rho1_Polynomial_{poly_order}{det_suffix}.png')
+            title = f"Polynomial order {poly_order}{det_str} | {n_loaded} visits"
+            plot_rho1(rho_all, rho_used, rho_reserved, output_file, title, ylim,
+                      n_all, n_used, n_reserved)
 
         # Plot SNR distribution
         snr_used = all_data['snr'][used_mask]
