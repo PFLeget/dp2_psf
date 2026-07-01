@@ -177,18 +177,19 @@ def launch_rays_simple(telescope, band, ax, ay):
 
     return spots
 
-def gauss_moments_image(im):
+def gauss_moments_image(im, mxx=None, myy=None, x0 = None, y0 = None):
     """
     2nd moments tested against galsim.hsm.findAdaptiveMom. 
-    (They are transposed)
     """
-    i,j = np.indices(im.shape)
+    j,i = np.indices(im.shape) # same order as findAdaptiveMom
+    # not sure it is consistent with "gauss_moments" above
     raw_flux = im.sum()
-    x0 = (i*im).sum()/raw_flux
-    y0 = (j*im).sum()/raw_flux
-    mxx = (im*(i-x0)**2).sum()/raw_flux
-    myy = (im*(j-y0)**2).sum()/raw_flux
-    mxy = 0
+    if mxx is None or myy is None or x0 is None or y0 is None: 
+        x0 = (i*im).sum()/raw_flux
+        y0 = (j*im).sum()/raw_flux
+        mxx = (im*(i-x0)**2).sum()/raw_flux
+        myy = (im*(j-y0)**2).sum()/raw_flux
+        mxy = 0
     det = mxx*myy-mxy*mxy
     wxx = myy/det
     wyy = mxx/det
@@ -864,9 +865,11 @@ def main():
 
     # Save data with fitted moments
     fields = ["mxx","myy","mxy","mx3","mx2y","mxy2","my3"]
+    model = fitter.model(params)
     for k,field in enumerate(fields) :
         if field in list(data.keys()) :
-            data['f'+field] = residuals[k] + data[field]
+            model[k] += (data[field]-model[k]).mean() # set <d-m>=0
+            data['f'+field] = model[k]
     filename = os.path.join(args.repOut, f'iq_fit_visit{args.visitID}.parquet')
     data.to_parquet(filename)
     print(f"Saved {filename}")
