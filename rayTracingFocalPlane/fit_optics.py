@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 """
 Fit optical parameters from star second moments using batoid ray tracing.
@@ -17,7 +16,6 @@ import polars as pl
 import pickle
 import argparse
 import os
-from tqdm import tqdm
 
 import lsst.afw.cameraGeom as cameraGeom
 from lsst.obs.lsst import LsstCam
@@ -94,7 +92,15 @@ def load_single_visit_data(parquet_path, rcut=300):
     -------
     DataFrame with columns: det, xfp, yfp, mxx, myy, mxy
     """
-    data = load_visit_data(parquet_path)
+    try:
+        data = load_visit_data(parquet_path)
+    except pl.exceptions.ColumnNotFoundError :
+        data = pd.read_parquet(parquet_path)
+        cut = np.sqrt(data.xfp**2 + data.yfp**2)<rcut
+        # reset_index renumbers the rows, mandatory
+        # for some algebraic operations on columns (?!)
+        return data[cut].reset_index(drop=True)
+    
     ccdIds = set(data['detector'])
 
     rows = []
@@ -118,9 +124,9 @@ def load_single_visit_data(parquet_path, rcut=300):
             'det': ccd,
             'xfp': fpx[0],
             'yfp': fpy[0],
-            'mxx': np.mean(data['mxx'][mask]),
-            'myy': np.mean(data['myy'][mask]),
-            'mxy': np.mean(data['mxy'][mask]),
+            'mxx': np.median(data['mxx'][mask]),
+            'myy': np.median(data['myy'][mask]),
+            'mxy': np.median(data['mxy'][mask]),
         })
 
     return pd.DataFrame(rows)
@@ -171,7 +177,81 @@ def launch_rays_simple(telescope, band, ax, ay):
 
     return spots
 
-def launch_rays(telescope, band, ax, ay, atmos, with_wcs=False, output_file=None):
+def gauss_moments_image(im, mxx=None, myy=None, x0 = None, y0 = None):
+    """
+    2nd moments tested against galsim.hsm.findAdaptiveMom. 
+    """
+    j,i = np.indices(im.shape) # same order as findAdaptiveMom
+    # not sure it is consistent with "gauss_moments" above
+    raw_flux = im.sum()
+    if mxx is None or myy is None or x0 is None or y0 is None: 
+        x0 = (i*im).sum()/raw_flux
+        y0 = (j*im).sum()/raw_flux
+        mxx = (im*(i-x0)**2).sum()/raw_flux
+        myy = (im*(j-y0)**2).sum()/raw_flux
+        mxy = 0
+    det = mxx*myy-mxy*mxy
+    wxx = myy/det
+    wyy = mxx/det
+    wxy = -mxy/det
+    for iter in range(50):
+        dx = i-x0
+        dy = j-y0
+        w = np.exp(-0.5*(wxx*dx**2+wyy*dy**2+2*wxy*dx*dy))
+        wim = w*im
+        flux = wim.sum()
+        mxx = 2*(wim*dx**2).sum()/flux
+        myy = 2*(wim*dy**2).sum()/flux
+        mxy = 2*(wim*dx*dy).sum()/flux
+        ddx = (dx*wim).sum()/flux
+        ddy = (dy*wim).sum()/flux
+        det = mxx*myy-mxy*mxy
+        nwxx = myy/det
+        nwyy = mxx/det
+        nwxy = -mxy/det
+        delta = np.abs(nwxx-wxx)+np.abs(nwyy-wyy)/wxx
+        if delta<1e-8 : break
+        x0 += ddx
+        y0 += ddy
+        wxx = nwxx
+        wyy = nwyy
+        wxy = nwxy
+    mx3 = (dx**3*wim).sum()/flux
+    mx2y = (dx**2*dy*wim).sum()/flux
+    mxy2 = (dx*dy**2*wim).sum()/flux
+    my3 = (dy**3*wim).sum()/flux
+    return {"mxx":mxx,"myy":myy,"mxy":mxy,"x0":x0,"y0":y0, "mx2y":mx2y,
+            "mx3":mx3, "mx2y":mx2y,"mxy2":mxy2, "my3":my3, "iter":iter}    
+
+def digitize(xr,yr,atmos, scale=1):
+    """
+    returns a 2D histogram of x,y, convolved with a 2D gaussian,
+    characterized by "atmos".
+    Limits are computed to 4 sigma of the gaussian.
+    Should return a wcs together with the image.
+    """
+    mxx,myy, mxy = atmos
+    det = mxx*myy-mxy**2
+    g_rad = det**0.25
+    wxx = myy/det
+    wyy = mxx/det
+    wxy = -mxy/det
+    xmin, xmax = int(xr.min()-1-4*g_rad), int(xr.max()+2+4*g_rad)
+    ymin,ymax = int(yr.min()-1-4*g_rad), int(yr.max()+2+4*g_rad)
+    step = 1/scale
+    binsx = np.linspace(xmin,xmax,(xmax-xmin)*scale+1)
+    binsy = np.linspace(ymin,ymax,(ymax-ymin)*scale+1)
+    xpix,ypix= np.meshgrid(binsx, binsy)
+    im = np.zeros_like(xpix)
+    for x,y in zip(xr,yr):
+        dx = xpix-x
+        dy = ypix-y
+        w = np.exp(-0.5*(wxx*dx**2+wyy*dy**2+2*wxy*dx*dy))
+        im+=w
+    return im
+
+def launch_rays(telescope, band, ax, ay, atmos, with_wcs=False,
+                spots_file=None):
     """
     launch rays for a few spots at angles (degrees) ax ay
     in tangent plane . 
@@ -194,22 +274,40 @@ def launch_rays(telescope, band, ax, ay, atmos, with_wcs=False, output_file=None
         telescope.trace(rays)
         return rays
 
-    out_columns = ['theta_x','theta_y']
+    out_columns = ['theta_x','theta_y', 'oxx','oyy','oxy']
     spots = None
-    if output_file is not None:
-        all_rays = pd.DataFrame(columns=['theta_x','theta_y','x','y'])
+    if spots_file is not None:
+        col_names = ['theta_x','theta_y','x','y','w']
+        spots_output = {name:[] for name in col_names}
     if with_wcs : spots['wcs'] = []
+    atm_spot = atmosphere_spot_diagram(*atmos)
     atx,aty,atw = atmos
     for alpha,beta in zip(ax,ay):
         rays = compute_rays(alpha,beta)
         w0 = ~rays.vignetted
-        # position in pixelss and moments in pix**2        
+        # position in pixels and moments in pix**2        
         x0, y0 = rays[w0].x.mean()*METERS_TO_PIXELS, rays[w0].y.mean()*METERS_TO_PIXELS
-        xx,yy,ww = convolve_with_seeing(rays[w0].x*METERS_TO_PIXELS-x0,
-                                        rays[w0].y*METERS_TO_PIXELS-y0,
-                                        atx,aty,atw)
-        moments_dict = gauss_moments(xx,yy,ww)
-        data = [alpha,beta]+list(moments_dict.values())
+        dx = rays[w0].x*METERS_TO_PIXELS-x0
+        dy = rays[w0].y*METERS_TO_PIXELS-y0
+        if False :
+            xx,yy,ww = convolve_with_seeing(dx, dy, atx, aty, atw)
+            moments_dict = gauss_moments(xx,yy,ww)
+        else :
+            image = digitize(dx,dy,atmos, scale=1)
+            # digitize should also return a wcs. The position from
+            # the next routine is offset
+            # if scale is set to anything else than 1, have to
+            # postprocess moments.
+            moments_dict = gauss_moments_image(image)
+
+        if spots_file is not None:
+            ones = np.ones(len(xx))
+            for name,l in zip(col_names,[alpha*ones, beta*ones, xx,yy,ww]):
+                spots_output[name]+=list(l)
+        oxx = dx.var()
+        oyy = dy.var()
+        oxy = (dx*dy).mean()
+        data = [alpha, beta, oxx, oyy, oxy]+list(moments_dict.values())
         if spots is None:
             out_columns += list(moments_dict.keys())
             spots = pd.DataFrame(columns=out_columns)
@@ -231,12 +329,9 @@ def launch_rays(telescope, band, ax, ay, atmos, with_wcs=False, output_file=None
             # wcs /= pixel_size # aij unit is degrees pper pixel 
             data.append(wcs)
         spots.loc[len(spots)] = data
-        if output_file is not None:
-            for r in rays[w0] :  # for some reason r.x is a 1-item list
-                all_rays.loc[len(all_rays)] = [alpha,beta,r.x[0],r.y[0]]
-    if output_file is not None: all_rays.to_parquet(output_file)
+    if spots_file is not None:
+        pd.DataFrame(spots_output).to_parquet(spots_file)
     return spots
-
 
 class WCS:
     """Mapping from focal plane (mm) to angles in tangent plane (degrees)."""
@@ -351,12 +446,14 @@ def convolve_with_seeing(x,y, xat, yat, w):
 def atmosphere_spot_diagram(mxx,myy,mxy, type = "Gauss"):
     """
     sample the seeing disk (mxx,myy,nmxy) in focal plane
+    The sampling is hard-coded to 0.5 sigma over -3->3.
     """
     assert type=="Gauss", "alternatives to Gauss not implemented (yet)"
-    x = np.linspace(-3,3,7) # sampling : 1 pixel
+    invstep = 2
+    x = np.linspace(-3,3,1+6*invstep) # sampling : 1/invstep sigma
     y = x
     det = mxx*myy-mxy**2
-    assert det>0, "convolve_with_seeing: non pos-def PSF !"
+    assert det>0, "atmosphere_spot_diagram: non pos-def PSF !"
     scale = np.pow(det,0.25)
     xx,yy = np.meshgrid(x*scale,y*scale)
     xx,yy = xx.flatten(), yy.flatten()
@@ -397,8 +494,7 @@ class BatoidFitter:
         self.to_fit['ax'] = a
         self.to_fit['ay'] = b
 
-    def residuals(self, parameters):
-        """Compute residuals: seeing + batoid - observed."""
+    def spots_properties(self, parameters, spots_file=None):
         offset_tel = self.move_parts(self.param_names, parameters[:-self.n_extra_params])
         smxx, smyy, smxy = parameters[-3:]
 
@@ -406,21 +502,48 @@ class BatoidFitter:
         ay = self.to_fit.ay.to_numpy()
 
         if self.use_gauss_moments:
-            atmos = atmosphere_spot_diagram(smxx,smyy,smxy)
+            atmos = (smxx,smyy,smxy)
             spots = launch_rays(offset_tel, self.band_for_fit, ax, ay,
-                                atmos, with_wcs=False, output_file=None)
+                                atmos, with_wcs=False, spots_file=spots_file)
             # the atmosphere is included in the spot moments, set it to zero in the residuals calculation
-            smxx = 0
-            smyy = 0
-            smxy = 0
         else:
             spots = launch_rays_simple(offset_tel, self.band_for_fit, ax, ay)
-        
-        momres = np.array([
-            smxx + spots.mxx - self.to_fit.mxx,
-            smyy + spots.myy - self.to_fit.myy,
-            smxy + spots.mxy - self.to_fit.mxy
+        return spots
+
+    def model(self, parameters, spots_file=None):
+        spots = self.spots_properties(parameters, spots_file = spots_file)
+        model = np.array([
+            spots.mxx ,
+            spots.myy ,
+            spots.mxy
         ])
+        if self.use_gauss_moments:
+            names = ['mx3','mx2y', 'mxy2', 'my3']
+            mom3 = np.array([spots[x] for x in names])
+            return np.vstack((model, mom3))
+        return model
+     
+    def residuals(self, parameters):
+        """Compute residuals: seeing + batoid - observed."""
+        # note that seeing could be computed here just as the average
+        # of the residuals
+        model = self.model(parameters, spots_file=None)
+        mom_seeing = parameters[-3:]
+        momres = np.array([
+                model[0] - self.to_fit.mxx,
+                model[1] - self.to_fit.myy,
+                model[2] - self.to_fit.mxy
+        ])
+        if not self.use_gauss_moments : # seeing is not in the model yet
+            momres +=  mom_seeing[:,np.newaxis] 
+        if self.have_third_moments and self.use_gauss_moments:
+            names = ['mx3','mx2y', 'mxy2', 'my3']
+            # print("model m3", {n:spots[n].mean() for n in names})
+            mom3res = np.array([model[k+3]-self.to_fit[x] for k,x in enumerate(names)])
+            # assume that only spatial variations are useful,
+            # because of mount contributions
+            mom3res -= mom3res.mean(axis=1)[:, np.newaxis]
+            return np.vstack((momres, self.mom3_weight * mom3res))
         return momres
 
     def chi2_func(self, parameters):
@@ -430,14 +553,21 @@ class BatoidFitter:
         print(f'chi2={chi2:.2f}, params={parameters}')
         return out.flatten()
 
+    
     def fit(self, data, band, seeing=None, start=None, verbose=True):
         """Fit AOS DOFs to data."""
         self.eval_tg_plane_angles(data, band)
-
+        self.have_third_moments = 'mx3' in list(data.keys())
+        if self.have_third_moments : 
+            yes_or_no = "" if self.use_gauss_moments else "NOT"
+            print(f"INFO: will {yes_or_no} use third moments in the fit")
+            self.mom3_weight = 100.
+            print(f"INFO: mom3_weight = {self.mom3_weight}")
+        self.seeing_start = len(self.param_names)
+        self.n_extra_params = 3
         starting_point = np.zeros(len(self.param_names) + self.n_extra_params)
         if seeing is not None:
-            starting_point[-3:] = np.array(seeing)
-
+            starting_point[self.seeing_start:self.seeing_start+3] = np.array(seeing)
         if start is not None:
             for name, val in start.items():
                 if name in self.param_names:
@@ -445,8 +575,9 @@ class BatoidFitter:
                     starting_point[i] = val
                 elif name in ['smxx', 'smyy', 'smxy']:
                     i = ['smxx', 'smyy', 'smxy'].index(name)
-                    starting_point[len(self.param_names) + i] = val
-
+                    starting_point[self.seeing_start + i] = val
+                else :
+                    raise KeyError(f"no such parameter name for initialization: {name}")
         if verbose:
             print(f"Fitting {len(self.param_names)} DOFs: {self.param_names}")
             print(f"Starting point: {starting_point}")
@@ -509,12 +640,12 @@ def plot_ccd_polygons(ax, detectors, values, geometry, cmap, vmin, vmax):
     return collection
 
 
-def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png', geometry=None, visit=None, band=None):
+def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png', geometry=None, visit=None, band=None, Te1e2 = True):
     """Plot observed vs fitted moments."""
     if geometry is None:
         geometry = load_ccd_geometry()
 
-    fig, axes = plt.subplots(3, 4, figsize=(18, 14))
+    fig, axes = plt.subplots(3, 4, figsize=(15, 12))
 
     detectors = data['det'].to_numpy() if hasattr(data['det'], 'to_numpy') else data['det'].values
     xfp = data['xfp'].to_numpy() if hasattr(data['xfp'], 'to_numpy') else data['xfp'].values
@@ -528,41 +659,55 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
     fit_myy = data['fmyy'].to_numpy() if hasattr(data['fmyy'], 'to_numpy') else data['fmyy'].values
     fit_mxy = data['fmxy'].to_numpy() if hasattr(data['fmxy'], 'to_numpy') else data['fmxy'].values
 
-    obs_T = obs_mxx + obs_myy
-    obs_e1 = (obs_mxx - obs_myy) / obs_T
-    obs_e2 = 2 * obs_mxy / obs_T
+    if Te1e2 :
+        obs_T = obs_mxx + obs_myy
+        obs_e1 = (obs_mxx - obs_myy) / obs_T
+        obs_e2 = 2 * obs_mxy / obs_T
 
-    fit_T = fit_mxx + fit_myy
-    fit_e1 = (fit_mxx - fit_myy) / fit_T
-    fit_e2 = 2 * fit_mxy / fit_T
+        fit_T = fit_mxx + fit_myy
+        fit_e1 = (fit_mxx - fit_myy) / fit_T
+        fit_e2 = 2 * fit_mxy / fit_T
 
-    obs_dT = obs_T - np.nanmean(obs_T)
-    obs_de1 = obs_e1 - np.nanmean(obs_e1)
-    obs_de2 = obs_e2 - np.nanmean(obs_e2)
+        obs_dT = obs_T - np.nanmean(obs_T)
+        obs_de1 = obs_e1 - np.nanmean(obs_e1)
+        obs_de2 = obs_e2 - np.nanmean(obs_e2)
 
-    fit_dT = fit_T - np.nanmean(fit_T)
-    fit_de1 = fit_e1 - np.nanmean(fit_e1)
-    fit_de2 = fit_e2 - np.nanmean(fit_e2)
+        fit_dT = fit_T - np.nanmean(fit_T)
+        fit_de1 = fit_e1 - np.nanmean(fit_e1)
+        fit_de2 = fit_e2 - np.nanmean(fit_e2)
 
-    res_dT = obs_dT - fit_dT
-    res_de1 = obs_de1 - fit_de1
-    res_de2 = obs_de2 - fit_de2
+        res_dT = obs_dT - fit_dT
+        res_de1 = obs_de1 - fit_de1
+        res_de2 = obs_de2 - fit_de2
 
-    vmin_dT, vmax_dT = -0.5, 0.5
-    vmin_de, vmax_de = -0.15, 0.15
-    lim = 350
+        vmin_dT, vmax_dT = -0.5, 0.5
+        vmin_de, vmax_de = -0.15, 0.15
+        lim = 350
 
-    plot_data = [
-        (0, 0, obs_dT, 'Observed dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
-        (0, 1, obs_de1, 'Observed de1', vmin_de, vmax_de, 'de1'),
-        (0, 2, obs_de2, 'Observed de2', vmin_de, vmax_de, 'de2'),
-        (1, 0, fit_dT, 'Fitted dT (batoid)', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
-        (1, 1, fit_de1, 'Fitted de1 (batoid)', vmin_de, vmax_de, 'de1'),
-        (1, 2, fit_de2, 'Fitted de2 (batoid)', vmin_de, vmax_de, 'de2'),
-        (2, 0, res_dT, 'Residual dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
-        (2, 1, res_de1, 'Residual de1', vmin_de, vmax_de, 'de1'),
-        (2, 2, res_de2, 'Residual de2', vmin_de, vmax_de, 'de2'),
-    ]
+        plot_data = [
+            (0, 0, obs_dT, 'Observed dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+            (0, 1, obs_de1, 'Observed de1', vmin_de, vmax_de, 'de1'),
+            (0, 2, obs_de2, 'Observed de2', vmin_de, vmax_de, 'de2'),
+            (1, 0, fit_dT, 'Fitted dT (batoid)', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+            (1, 1, fit_de1, 'Fitted de1 (batoid)', vmin_de, vmax_de, 'de1'),
+            (1, 2, fit_de2, 'Fitted de2 (batoid)', vmin_de, vmax_de, 'de2'),
+            (2, 0, res_dT, 'Residual dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+            (2, 1, res_de1, 'Residual de1', vmin_de, vmax_de, 'de1'),
+            (2, 2, res_de2, 'Residual de2', vmin_de, vmax_de, 'de2'),
+        ]
+    else : # TBD
+        plot_data = [
+            (0, 0, obs_mxx, 'Observed mxx', x, y , 'dT (pixel$^2$)'),
+            (0, 1, obs_de1, 'Observed de1', vmin_de, vmax_de, 'de1'),
+            (0, 2, obs_de2, 'Observed de2', vmin_de, vmax_de, 'de2'),
+            (1, 0, fit_dT, 'Fitted dT (batoid)', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+            (1, 1, fit_de1, 'Fitted de1 (batoid)', vmin_de, vmax_de, 'de1'),
+            (1, 2, fit_de2, 'Fitted de2 (batoid)', vmin_de, vmax_de, 'de2'),
+            (2, 0, res_dT, 'Residual dT', vmin_dT, vmax_dT, 'dT (pixel$^2$)'),
+            (2, 1, res_de1, 'Residual de1', vmin_de, vmax_de, 'de1'),
+            (2, 2, res_de2, 'Residual de2', vmin_de, vmax_de, 'de2'),
+        ]
+
 
     for row, col, values, title, vmin, vmax, label in plot_data:
         ax = axes[row, col]
@@ -635,15 +780,19 @@ def plot_fit_results(data, fit_params, dof_names, output_file='fit_results.png',
 
 def main():
     parser = argparse.ArgumentParser(description="Fit optical parameters from star moments for a single visit")
-    parser.add_argument('--visitMappingFile', type=str, required=True,
-                        help='Path to visit_parquet_mapping.pkl')
+    #parser.add_argument('--visitMappingFile', type=str, required=True,
+    #                    help='Path to visit_parquet_mapping.pkl')
+    parser.add_argument('--visitMoments', type=str, required=True,
+                        help = 'path to input file')
     parser.add_argument('--visitID', type=int, required=True,
-                        help='Visit ID to process')
+                        help='Visit ID to process (used for labelling output)')
+    parser.add_argument('--band', required=True,
+                        help='band (\'ugrizy\')')
     parser.add_argument('--repOut', type=str, default='./',
                         help='Output directory for all files')
     parser.add_argument('--params', type=str, nargs='+',
                         default=['m2_dz', 'm2_rx', 'm2_ry', 'cam_dz', 'cam_rx', 'cam_ry'],
-                        help='DOF parameters to fit')
+                        help='DOF parameters to fit (can be a filename that contains the list)')
     parser.add_argument('--start', type=str, default=None,
                         help='Pickle file with starting values')
     parser.add_argument('--rcut', type=float, default=300,
@@ -657,16 +806,18 @@ def main():
     os.makedirs(args.repOut, exist_ok=True)
 
     # Load visit mapping
-    with open(args.visitMappingFile, 'rb') as f:
-        visit_mapping = pickle.load(f)
+    #with open(args.visitMappingFile, 'rb') as f:
+    #    visit_mapping = pickle.load(f)
 
-    if args.visitID not in visit_mapping:
-        raise ValueError(f"Visit {args.visitID} not found in mapping file")
+    #if args.visitID not in visit_mapping:
+    #    raise ValueError(f"Visit {args.visitID} not found in mapping file")
 
-    info = visit_mapping[args.visitID]
-    band = info['band']
-    parquet_path = info['parquet_path']
+    #info = visit_mapping[args.visitID]
+    #band = info['band']
+    #parquet_path = info['parquet_path']
 
+    band = args.band
+    parquet_path = args.visitMoments
     print(f"Processing visit {args.visitID}, band={band}")
     print(f"  Input: {parquet_path}")
 
@@ -683,7 +834,13 @@ def main():
     # Load data
     data = load_single_visit_data(parquet_path, args.rcut)
     print(f"  Loaded {len(data)} CCDs")
-
+    # if arg.params is a file name, then read it
+    if len(args.params) == 1 :
+        try :
+            with open(args.params[0], 'r') as f :
+                args.params = f.read().split()
+        except FileNotFoundError:
+            pass
     # Fit
     fitter = BatoidFitter(telescope, args.params, args.use_gauss_moments)
     params, cov_params = fitter.fit(data, band, seeing=[1.3, 1.3, 0],
@@ -707,16 +864,21 @@ def main():
         print(f"  {k}: {v}")
 
     # Save data with fitted moments
-    data['fmxx'] = residuals[0] + data['mxx']
-    data['fmyy'] = residuals[1] + data['myy'] 
-    data['fmxy'] = residuals[2] + data['mxy']
-    data.to_parquet(os.path.join(args.repOut, f'iq_fit_visit{args.visitID}.parquet'))
-    print(f"Saved iq_fit_visit{args.visitID}.parquet")
+    fields = ["mxx","myy","mxy","mx3","mx2y","mxy2","my3"]
+    model = fitter.model(params)
+    for k,field in enumerate(fields) :
+        if field in list(data.keys()) :
+            model[k] += (data[field]-model[k]).mean() # set <d-m>=0
+            data['f'+field] = model[k]
+    filename = os.path.join(args.repOut, f'iq_fit_visit{args.visitID}.parquet')
+    data.to_parquet(filename)
+    print(f"Saved {filename}")
 
     # Save fit params
     result_df = pd.DataFrame([result])
-    result_df.to_parquet(os.path.join(args.repOut, f'fit_params_visit{args.visitID}.parquet'))
-    print(f"Saved fit_params_visit{args.visitID}.parquet")
+    filename = os.path.join(args.repOut, f'fit_params_visit{args.visitID}.parquet')
+    result_df.to_parquet(filename)
+    print(f"Saved {filename}")
 
     # Save plot
     geometry = load_ccd_geometry()
