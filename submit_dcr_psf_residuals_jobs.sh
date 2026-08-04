@@ -16,7 +16,11 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 REP_OUT_PLOT="${SCRIPT_DIR}/plots"
 REPO="dp2_prep"
 
-# Default collection (override as first positional arg)
+# visit->parquet mapping (getURI on refit_psf_star) whose parquet carry the
+# alt/az moment + fgcm_mag columns. Build/point this at your alt/az re-run.
+VISIT_MAPPING_FILE="${SCRIPT_DIR}/data/visit_parquet_mapping.pkl"
+
+# Default collection exposing visit_table (used only for DCR inputs; override as first positional arg)
 COLLECTION="LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2"
 
 # First non-flag argument overrides the collection
@@ -73,6 +77,7 @@ echo "=================================================="
 python ${SCRIPT_NAME} \\
     --repo ${REPO} \\
     --collection "${COLLECTION}" \\
+    --visitMappingFile "${VISIT_MAPPING_FILE}" \\
     --bands ${band} \\
     --repOutPlot "${REP_OUT_PLOT}"${EXTRA_ARGS}
 

@@ -1,10 +1,17 @@
 """
-Reproduce the SITCOMTN-174 PSF second-moment residual batch (Figs 2-6) directly
-from the new ``finalized_src_table`` produced by finalizeCharacterization.py.
+Reproduce the SITCOMTN-174 PSF second-moment residual batch (Figs 2-6) from the
+``refit_psf_star`` PSF-star table produced by finalizeCharacterization.py.
 
-The pipeline table already carries:
+Data access follows the rest of this repo: a visit->parquet mapping built with
+``butler.getURI("refit_psf_star", ...)`` (see getData.py) is read directly with
+polars, one parquet per visit, with no butler call inside the loop. The butler is
+used once, at startup, only to load ``visit_table`` for the per-visit DCR inputs.
+
+The ``refit_psf_star`` table (re-run with the user's finalizeCharacterization
+changes) carries:
   - second moments in alt/az (horizon) coordinates: shape_Ialtalt/Iazaz/Ialtaz
     and psfShape_Ialtalt/Iazaz/Ialtaz  (requires do_add_sky_moments=True),
+  - second moments in sky RA/Dec: shape_Iuu/Ivv/Iuv, psfShape_Iuu/Ivv/Iuv,
   - per-band FGCM magnitudes: fgcm_mag_<band>  (requires do_add_fgcm_photometry=True).
 
 DCR inputs (zenith angle z, parallactic angle q) are taken per visit from
@@ -29,6 +36,7 @@ import matplotlib.gridspec as gridspec
 
 import os
 os.environ["POLARS_MAX_THREADS"] = "1"
+import polars
 
 import pickle
 import argparse
@@ -188,23 +196,15 @@ def compute_visit_dcr(visit_table, site_lat_deg=SITE_LAT_DEG):
 
 
 # ----------------------------------------------------------------------------
-# Data accumulation from the butler
+# Data accumulation: getURI mapping + direct polars read of refit_psf_star
+# (same pattern as SNR_vs_dT.py / SkyPlot_vs_secondMoment.py)
 # ----------------------------------------------------------------------------
-def _require_columns(table, cols):
-    missing = [c for c in cols if c not in table.colnames]
-    if missing:
-        raise KeyError(
-            f"finalized_src_table is missing columns {missing}. "
-            "Was the pipeline run with do_add_sky_moments=True and "
-            "do_add_fgcm_photometry=True?"
-        )
-
-
-def accumulate(repo, collection, bands, frame, color_band1, color_band2,
-               mag_column, star_set, n_visits):
+def accumulate(repo, collection, visitMappingFile, bands, frame, color_band1,
+               color_band2, mag_column, star_set, n_visits):
     """
-    Loop over visits (from visit_table), read finalized_src_table per visit,
-    and accumulate per-star arrays needed for all plots.
+    Read the visit->parquet mapping (built by getData.py via butler.getURI on
+    ``refit_psf_star``), load ``visit_table`` once for the per-visit DCR, then
+    loop visits reading each parquet directly with polars.
 
     Returns
     -------
@@ -213,6 +213,11 @@ def accumulate(repo, collection, bands, frame, color_band1, color_band2,
     """
     from lsst.daf.butler import Butler
 
+    # Per-visit parquet URIs (no butler in the loop below)
+    with open(visitMappingFile, 'rb') as f:
+        visit_mapping = pickle.load(f)
+
+    # Single butler call: visit_table drives the per-visit DCR (z, q).
     butler = Butler(repo, collections=collection)
     visit_table = butler.get('visit_table', instrument='LSSTCam')
     visit_dcr = compute_visit_dcr(visit_table)
@@ -223,42 +228,50 @@ def accumulate(repo, collection, bands, frame, color_band1, color_band2,
     n_visits_per_band = {}
 
     for b in bands:
-        # Visits of this band, in visit order
-        band_visits = [v for v, info in visit_dcr.items() if info['band'] == b]
-        band_visits.sort()
+        # Visits of this band, in visit order (from the mapping)
+        band_visits = sorted(v for v, info in visit_mapping.items() if info['band'] == b)
         if n_visits is not None:
             band_visits = band_visits[:n_visits]
         n_visits_per_band[b] = len(band_visits)
         print(f"Band {b}: {len(band_visits)} visits", flush=True)
 
-        for v in tqdm(band_visits, desc=f"band {b}"):
-            try:
-                tab = butler.get('finalized_src_table', instrument='LSSTCam', visit=v)
-            except Exception as e:
-                print(f"  visit {v}: failed to load ({e})", flush=True)
-                continue
+        mag_col = mag_column.format(band=b)
+        cols = list(src_cols) + list(psf_cols) + [
+            f'fgcm_mag_{color_band1}', f'fgcm_mag_{color_band2}', mag_col,
+            'calib_psf_reserved', 'calib_psf_used',
+        ]
+        cols = list(dict.fromkeys(cols))  # de-dup (e.g. mag_col == fgcm_mag_c1)
 
-            need = list(src_cols) + list(psf_cols) + [
-                f'fgcm_mag_{color_band1}', f'fgcm_mag_{color_band2}', mag_column.format(band=b),
-            ]
-            _require_columns(tab, need)
+        for v in tqdm(band_visits, desc=f"band {b}"):
+            if v not in visit_dcr:
+                print(f"  visit {v}: absent from visit_table, skipping", flush=True)
+                continue
+            parquet_path = visit_mapping[v]['parquet_path']
+            try:
+                tab = polars.scan_parquet(parquet_path).select(cols).collect()
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to read columns {cols} from {parquet_path} "
+                    f"(visit {v}). Does this refit_psf_star have the alt/az moment "
+                    f"(shape_Ialtalt...) and fgcm_mag_* columns? Underlying error: {e}"
+                )
 
             # Star selection
             if star_set == 'reserved':
-                sel = np.asarray(tab['calib_psf_reserved'], dtype=bool)
+                sel = tab['calib_psf_reserved'].to_numpy().astype(bool)
             elif star_set == 'used':
-                sel = np.asarray(tab['calib_psf_used'], dtype=bool)
+                sel = tab['calib_psf_used'].to_numpy().astype(bool)
             else:  # 'all'
                 sel = np.ones(len(tab), dtype=bool)
             if not np.any(sel):
                 continue
 
-            ixx = np.asarray(tab[src_cols[0]], dtype=float)[sel]
-            iyy = np.asarray(tab[src_cols[1]], dtype=float)[sel]
-            ixy = np.asarray(tab[src_cols[2]], dtype=float)[sel]
-            mixx = np.asarray(tab[psf_cols[0]], dtype=float)[sel]
-            miyy = np.asarray(tab[psf_cols[1]], dtype=float)[sel]
-            mixy = np.asarray(tab[psf_cols[2]], dtype=float)[sel]
+            ixx = tab[src_cols[0]].to_numpy()[sel]
+            iyy = tab[src_cols[1]].to_numpy()[sel]
+            ixy = tab[src_cols[2]].to_numpy()[sel]
+            mixx = tab[psf_cols[0]].to_numpy()[sel]
+            miyy = tab[psf_cols[1]].to_numpy()[sel]
+            mixy = tab[psf_cols[2]].to_numpy()[sel]
 
             e1, e2, T = moment2ellipticity(ixx, iyy, ixy)
             me1, me2, mT = moment2ellipticity(mixx, miyy, mixy)
@@ -267,13 +280,13 @@ def accumulate(repo, collection, bands, frame, color_band1, color_band2,
             with np.errstate(divide='ignore', invalid='ignore'):
                 dT_T = (T - mT) / T
 
-            mag1 = np.asarray(tab[f'fgcm_mag_{color_band1}'], dtype=float)[sel]
-            mag2 = np.asarray(tab[f'fgcm_mag_{color_band2}'], dtype=float)[sel]
+            mag1 = tab[f'fgcm_mag_{color_band1}'].to_numpy()[sel]
+            mag2 = tab[f'fgcm_mag_{color_band2}'].to_numpy()[sel]
             color = mag1 - mag2
-            mag = np.asarray(tab[mag_column.format(band=b)], dtype=float)[sel]
+            mag = tab[mag_col].to_numpy()[sel]
 
             info = visit_dcr[v]
-            n = np.sum(sel)
+            n = int(np.sum(sel))
             acc['band'].append(np.full(n, b))
             acc['color'].append(color.astype(np.float32))
             acc['mag'].append(mag.astype(np.float32))
@@ -285,8 +298,8 @@ def accumulate(repo, collection, bands, frame, color_band1, color_band2,
             acc['tan_z2'].append(np.full(n, info['tan_z2'], dtype=np.float32))
 
     out = {}
-    for k, v in acc.items():
-        out[k] = np.concatenate(v) if len(v) else np.array([])
+    for k, val in acc.items():
+        out[k] = np.concatenate(val) if len(val) else np.array([])
     out['n_visits_per_band'] = n_visits_per_band
     print(f"Total stars accumulated: {len(out['band']):,}", flush=True)
     return out
@@ -448,7 +461,8 @@ def plot_vs_color(data, bands, colorname, color_range, nbins, repOutPlot, tag, b
 # ----------------------------------------------------------------------------
 # Driver
 # ----------------------------------------------------------------------------
-def run(repo='dp2_prep', collection=None, bands='ugrizy', frame='altaz',
+def run(repo='dp2_prep', collection=None, visitMappingFile='data/visit_parquet_mapping.pkl',
+        bands='ugrizy', frame='altaz',
         color_band1='g', color_band2='i', mag_column='fgcm_mag_{band}',
         star_set='reserved', n_visits=None, dcr_range=(-1.5, 1.5),
         mag_range=(16., 22.), color_range=(0.0, 3.5), nbins=7,
@@ -466,12 +480,13 @@ def run(repo='dp2_prep', collection=None, bands='ugrizy', frame='altaz',
         _replot_from_pickle(saved, repOutPlot)
         return
 
-    data = accumulate(repo, collection, bands, frame, color_band1, color_band2,
-                      mag_column, star_set, n_visits)
+    data = accumulate(repo, collection, visitMappingFile, bands, frame,
+                      color_band1, color_band2, mag_column, star_set, n_visits)
 
     results = {
         'meta': {
-            'repo': repo, 'collection': collection, 'bands': bands, 'frame': frame,
+            'repo': repo, 'collection': collection, 'visitMappingFile': visitMappingFile,
+            'bands': bands, 'frame': frame,
             'colorname': colorname, 'star_set': star_set, 'n_visits': n_visits,
             'dcr_range': dcr_range, 'mag_range': mag_range, 'color_range': color_range,
             'nbins': nbins, 'n_visits_per_band': data['n_visits_per_band'],
@@ -605,8 +620,12 @@ def _parse_range(s):
 
 def main():
     p = argparse.ArgumentParser(description="Reproduce SITCOMTN-174 PSF residual batch (Figs 2-6)")
-    p.add_argument('--repo', type=str, default='dp2_prep', help='Butler repo')
-    p.add_argument('--collection', type=str, default=None, help='Butler collection (required unless --pklInput)')
+    p.add_argument('--repo', type=str, default='dp2_prep',
+                   help='Butler repo (used only for the single visit_table load)')
+    p.add_argument('--collection', type=str, default='LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2',
+                   help='Butler collection exposing visit_table (used only for the DCR inputs)')
+    p.add_argument('--visitMappingFile', type=str, default='data/visit_parquet_mapping.pkl',
+                   help='visit->parquet mapping (getURI on refit_psf_star) with alt/az + fgcm columns')
     p.add_argument('--bands', type=str, default='ugrizy', help='Bands to process, e.g. g or ugrizy')
     p.add_argument('--frame', type=str, default='altaz', choices=['altaz', 'radec'],
                    help='Coordinate frame for the moments')
@@ -630,14 +649,12 @@ def main():
     p.add_argument('--pklInput', type=str, default=None, help='Replot from a saved results pkl (no butler)')
     args = p.parse_args()
 
-    if args.pklInput is None and args.collection is None:
-        p.error("--collection is required unless --pklInput is given")
-
     color_edges = None
     if args.color_edges is not None:
         color_edges = [float(x) for x in args.color_edges.split(',')]
 
-    run(repo=args.repo, collection=args.collection, bands=args.bands, frame=args.frame,
+    run(repo=args.repo, collection=args.collection, visitMappingFile=args.visitMappingFile,
+        bands=args.bands, frame=args.frame,
         color_band1=args.color_band1, color_band2=args.color_band2, mag_column=args.mag_column,
         star_set=args.star_set, n_visits=args.n_visits, dcr_range=args.dcr_range,
         mag_range=args.mag_range, color_range=args.color_range, nbins=args.nbins,
