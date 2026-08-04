@@ -226,6 +226,7 @@ def accumulate(repo, collection, visitMappingFile, bands, frame, color_band1,
 
     acc = {k: [] for k in ('band', 'color', 'mag', 'de1', 'de2', 'dT_T', 'dcr1', 'dcr2', 'tan_z2')}
     n_visits_per_band = {}
+    failed_visits = []  # visits whose parquet could not be read
 
     for b in bands:
         # Visits of this band, in visit order (from the mapping)
@@ -250,11 +251,9 @@ def accumulate(repo, collection, visitMappingFile, bands, frame, color_band1,
             try:
                 tab = polars.scan_parquet(parquet_path).select(cols).collect()
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to read columns {cols} from {parquet_path} "
-                    f"(visit {v}). Does this refit_psf_star have the alt/az moment "
-                    f"(shape_Ialtalt...) and fgcm_mag_* columns? Underlying error: {e}"
-                )
+                failed_visits.append(v)
+                print(f"  visit {v}: failed to read parquet, skipping ({e})", flush=True)
+                continue
 
             # Star selection
             if star_set == 'reserved':
@@ -301,7 +300,11 @@ def accumulate(repo, collection, visitMappingFile, bands, frame, color_band1,
     for k, val in acc.items():
         out[k] = np.concatenate(val) if len(val) else np.array([])
     out['n_visits_per_band'] = n_visits_per_band
+    out['failed_visits'] = failed_visits
     print(f"Total stars accumulated: {len(out['band']):,}", flush=True)
+    if failed_visits:
+        print(f"WARNING: {len(failed_visits)} visit(s) failed to read and were skipped: "
+              f"{failed_visits}", flush=True)
     return out
 
 
@@ -490,6 +493,7 @@ def run(repo='dp2_prep', collection=None, visitMappingFile='data/visit_parquet_m
             'colorname': colorname, 'star_set': star_set, 'n_visits': n_visits,
             'dcr_range': dcr_range, 'mag_range': mag_range, 'color_range': color_range,
             'nbins': nbins, 'n_visits_per_band': data['n_visits_per_band'],
+            'failed_visits': data.get('failed_visits', []),
         },
         'dcr': {}, 'mag': {}, 'color': {}, 'color_edges': {},
     }
